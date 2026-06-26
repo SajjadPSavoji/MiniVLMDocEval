@@ -22,7 +22,6 @@ scripts/                  Thin entrypoints you run on Colab (all logic is in .py
   smoke_test.py             1 model x 1 dataset x N samples, end-to-end
 notebooks/
   colab.ipynb             The ONLY notebook — a thin "terminal": git pull + run a script
-tools/decord-stub/        mac-arm64 stub for `decord` (image-only eval; no video)
 external/VLMEvalKit/      The engine — VENDORED & pinned (committed; see external/README.md)
 ```
 
@@ -39,20 +38,13 @@ The mac is for **development**: editing scripts and plumbing-testing wrapper log
 The Colab GPU is driven from VS Code via the Google Colab extension. Code crosses
 the local↔cloud boundary through **git** (Claude edits local `.py` → push → Colab pulls):
 
-1. Push this repo to GitHub once; set `REPO_URL` in `notebooks/colab.ipynb`.
+1. `REPO_URL` in `notebooks/colab.ipynb` already points at this repo.
 2. Set runtime to **T4 GPU**; run the two one-time cells (clone, `setup.sh`).
 3. Iterate: re-run the **Run cell** (`git pull && python scripts/...`) after each push.
    (Or use the extension's terminal panel and type the same command directly.)
 
-### Local mac (development only)
-
-```bash
-python3 -m venv .venv && source .venv/bin/activate
-bash setup.sh          # installs the decord stub + VLMEvalKit editable
-```
-
-Models load and generate on mac (MPS), but VLMEvalKit's CUDA-bound wrappers do
-not — use Colab for the eval itself.
+> Setup targets **Linux/Colab**. The eval needs CUDA, so it does not run on mac
+> (VLMEvalKit's wrappers are CUDA-bound); local mac is not a supported run target.
 
 ## Status
 

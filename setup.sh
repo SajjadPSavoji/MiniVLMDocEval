@@ -21,16 +21,8 @@ if [ ! -f "$DIR/setup.py" ]; then
   exit 1
 fi
 
-# 1. Install VLMEvalKit's deps.
-#    mac-arm64: `decord` (video) has no wheel and we evaluate image-only, so we
-#    substitute a local stub and skip the real decord. Linux/Colab uses it as-is.
-if [[ "$(uname -s)" == "Darwin" && "$(uname -m)" == "arm64" ]]; then
-  echo "mac-arm64 detected -> installing local decord stub (image-only eval)"
-  pip install ./tools/decord-stub
-  grep -vi '^decord' "$DIR/requirements.txt" | pip install -r /dev/stdin
-else
-  pip install -r "$DIR/requirements.txt"
-fi
+# 1. Install VLMEvalKit's deps (targets Linux/Colab; `decord` has a Linux wheel).
+pip install -r "$DIR/requirements.txt"
 
 # 2. Install VLMEvalKit itself (editable, no deps — deps handled above).
 pip install --no-deps -e "$DIR"
