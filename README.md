@@ -22,7 +22,7 @@ scripts/                  Thin entrypoints you run on Colab (all logic is in .py
   smoke_test.py             1 model x 1 dataset x N samples, end-to-end
 notebooks/
   colab.ipynb             The ONLY notebook — a thin "terminal": git pull + run a script
-external/VLMEvalKit/      The engine — VENDORED & pinned (committed; see external/README.md)
+external/VLMEvalKit/      The engine — cloned by setup.sh at a pinned commit (gitignored; see external/README.md)
 ```
 
 All real code is `.py`. The notebook is just a stable terminal — each experiment

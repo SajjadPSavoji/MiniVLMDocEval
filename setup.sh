@@ -1,30 +1,32 @@
 #!/usr/bin/env bash
-# Reproducible setup for MiniVLMDocEval.
+# Reproducible setup for MiniVLMDocEval (targets Linux/Colab).
 #
-# VLMEvalKit is VENDORED at external/VLMEvalKit (committed to this repo, pinned to
-# an exact upstream commit — see external/README.md). This script does NOT clone
-# anything; it just installs the vendored copy. It is never modified — our custom
-# model wrappers live in our own code and register via VLMEvalKit's plugin path.
+# Clones VLMEvalKit at a PINNED commit into external/ (gitignored), then installs
+# it. VLMEvalKit is a dependency — never modified; our custom model wrappers live
+# in our own code and register via its plugin path. The local clone also serves
+# as a read-only reference while coding.
 #
 # Why editable (-e) and not a wheel:
-#   VLMEvalKit's setup.py uses find_packages(), which drops the ~20 subdirs that
-#   lack an __init__.py (e.g. megabench/parsing). Building a wheel therefore
-#   produces a BROKEN install. Editable install uses the source tree directly
-#   and includes everything. This matches VLMEvalKit's own install docs.
+#   VLMEvalKit's setup.py find_packages() drops subdirs lacking __init__.py
+#   (e.g. megabench/parsing), so a built wheel is broken. Editable uses the
+#   source tree directly. Matches VLMEvalKit's own install docs.
 set -euo pipefail
 
-DIR=external/VLMEvalKit   # vendored, pinned (see external/README.md)
+COMMIT=2cf2a36c6e79b51faf676a7011b3a0f5b579814d   # HEAD of main @ 2026-06-26 (just ahead of v0.3rc1)
+REPO=https://github.com/open-compass/VLMEvalKit.git
+DIR=external/VLMEvalKit
 
-if [ ! -f "$DIR/setup.py" ]; then
-  echo "ERROR: $DIR is missing. It is vendored in this repo — make sure you cloned"
-  echo "the full repository (it should be present without any extra step)." >&2
-  exit 1
+# 1. Clone at the pinned commit (idempotent; replace any non-git leftover).
+if [ ! -d "$DIR/.git" ]; then
+  rm -rf "$DIR"
+  git clone "$REPO" "$DIR"
 fi
+git -C "$DIR" fetch --quiet origin "$COMMIT"
+git -C "$DIR" checkout --quiet "$COMMIT"
+echo "VLMEvalKit pinned at $(git -C "$DIR" rev-parse --short HEAD)"
 
-# 1. Install VLMEvalKit's deps (targets Linux/Colab; `decord` has a Linux wheel).
+# 2. Install deps + the editable package.
 pip install -r "$DIR/requirements.txt"
-
-# 2. Install VLMEvalKit itself (editable, no deps — deps handled above).
 pip install --no-deps -e "$DIR"
 
 echo "Setup complete. Verify with:"
