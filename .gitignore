@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+.ipynb_checkpoints/
+
+# Virtual environment
+.venv/
+
+# VLMEvalKit clone — reconstructed by setup.sh at the pinned commit (not vendored)
+external/VLMEvalKit/
+
+# Eval outputs / caches / data
+outputs/
+results/
+*.log
+.env
+
+# OS
+.DS_Store
+
+# Claude Code local settings
+.claude/settings.local.json

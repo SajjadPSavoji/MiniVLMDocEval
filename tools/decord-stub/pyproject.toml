@@ -1,0 +1,14 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+# Local mac-arm64 stub for `decord` — upstream has no arm64 macOS wheel.
+# Version satisfies VLMEvalKit's `decord>=0.6.0` so the import resolves.
+# DO NOT install on Linux/Colab — use the real decord there (for video benchmarks).
+name = "decord"
+version = "0.6.0"
+description = "Local stub of decord for mac-arm64 (image-only eval; no video decoding)"
+
+[tool.setuptools]
+packages = ["decord"]
