@@ -1,30 +1,27 @@
 #!/usr/bin/env bash
 # Reproducible setup for MiniVLMDocEval.
 #
-# Installs VLMEvalKit as a PINNED DEPENDENCY (not forked). Custom model wrappers
-# live in our own code and are registered via VLMEvalKit's plugin path; the
-# installed package is never modified.
+# VLMEvalKit is VENDORED at external/VLMEvalKit (committed to this repo, pinned to
+# an exact upstream commit — see external/README.md). This script does NOT clone
+# anything; it just installs the vendored copy. It is never modified — our custom
+# model wrappers live in our own code and register via VLMEvalKit's plugin path.
 #
-# Why editable (-e) and not `pip install git+...`:
+# Why editable (-e) and not a wheel:
 #   VLMEvalKit's setup.py uses find_packages(), which drops the ~20 subdirs that
 #   lack an __init__.py (e.g. megabench/parsing). Building a wheel therefore
 #   produces a BROKEN install. Editable install uses the source tree directly
 #   and includes everything. This matches VLMEvalKit's own install docs.
 set -euo pipefail
 
-COMMIT=2cf2a36c6e79b51faf676a7011b3a0f5b579814d   # HEAD of main @ 2026-06-26 (just ahead of v0.3rc1)
-REPO=https://github.com/open-compass/VLMEvalKit.git
-DIR=external/VLMEvalKit
+DIR=external/VLMEvalKit   # vendored, pinned (see external/README.md)
 
-# 1. Clone VLMEvalKit at the pinned commit (idempotent).
-if [ ! -d "$DIR/.git" ]; then
-  git clone "$REPO" "$DIR"
+if [ ! -f "$DIR/setup.py" ]; then
+  echo "ERROR: $DIR is missing. It is vendored in this repo — make sure you cloned"
+  echo "the full repository (it should be present without any extra step)." >&2
+  exit 1
 fi
-git -C "$DIR" fetch --quiet origin "$COMMIT"
-git -C "$DIR" checkout --quiet "$COMMIT"
-echo "VLMEvalKit pinned at $(git -C "$DIR" rev-parse --short HEAD)"
 
-# 2. Install VLMEvalKit's deps.
+# 1. Install VLMEvalKit's deps.
 #    mac-arm64: `decord` (video) has no wheel and we evaluate image-only, so we
 #    substitute a local stub and skip the real decord. Linux/Colab uses it as-is.
 if [[ "$(uname -s)" == "Darwin" && "$(uname -m)" == "arm64" ]]; then
@@ -35,7 +32,7 @@ else
   pip install -r "$DIR/requirements.txt"
 fi
 
-# 3. Install VLMEvalKit itself (editable, no deps — deps handled above).
+# 2. Install VLMEvalKit itself (editable, no deps — deps handled above).
 pip install --no-deps -e "$DIR"
 
 echo "Setup complete. Verify with:"

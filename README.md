@@ -23,7 +23,7 @@ scripts/                  Thin entrypoints you run on Colab (all logic is in .py
 notebooks/
   colab.ipynb             The ONLY notebook — a thin "terminal": git pull + run a script
 tools/decord-stub/        mac-arm64 stub for `decord` (image-only eval; no video)
-external/VLMEvalKit/      The pinned engine (gitignored; recreated by setup.sh)
+external/VLMEvalKit/      The engine — VENDORED & pinned (committed; see external/README.md)
 ```
 
 All real code is `.py`. The notebook is just a stable terminal — each experiment

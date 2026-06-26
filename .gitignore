@@ -8,8 +8,6 @@ build/
 # Virtual environment
 .venv/
 
-# VLMEvalKit clone — reconstructed by setup.sh at the pinned commit (not vendored)
-external/VLMEvalKit/
 
 # Eval outputs / caches / data
 outputs/
@@ -20,5 +18,5 @@ results/
 # OS
 .DS_Store
 
-# Claude Code local settings
-.claude/settings.local.json
+# Claude Code config (session-specific; not project config)
+.claude/

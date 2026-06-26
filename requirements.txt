@@ -1,18 +1,17 @@
 # MiniVLMDocEval — dependency record (reproducibility)
 #
 # DO NOT `pip install -r requirements.txt` as the first step — run ./setup.sh
-# instead. VLMEvalKit must be installed *editable from a pinned clone* (a built
-# wheel drops subpackages without __init__.py), and on mac-arm64 a local decord
-# stub must be installed first. setup.sh handles both, idempotently.
+# instead. VLMEvalKit must be installed *editable* (a built wheel drops
+# subpackages without __init__.py), and on mac-arm64 a local decord stub must be
+# installed first. setup.sh handles both, idempotently.
 #
-# Engine (pinned, NOT forked):
-#   VLMEvalKit @ commit 2cf2a36c6e79b51faf676a7011b3a0f5b579814d
-#   Installed via:  pip install --no-deps -e ./external/VLMEvalKit
+# Engine: VLMEvalKit is VENDORED at external/VLMEvalKit (committed, pinned to
+#   upstream commit 2cf2a36c6e79b51faf676a7011b3a0f5b579814d; never modified).
+#   See external/README.md. Installed via: pip install --no-deps -e external/VLMEvalKit
 #   Transitive deps: external/VLMEvalKit/requirements.txt (minus decord on mac)
 #
 # mac-arm64 only:
 #   tools/decord-stub  (satisfies decord>=0.6.0; image-only eval, no video)
 #
-# After ./setup.sh has cloned external/VLMEvalKit, this line reinstalls the
-# editable package on its own:
+# This line installs the editable vendored package:
 -e ./external/VLMEvalKit
