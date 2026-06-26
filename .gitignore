@@ -12,11 +12,11 @@ build/
 external/VLMEvalKit/
 
 
-# Heavy eval predictions / resume state (kept on Drive, never git)
+# Eval outputs — everything (predictions + summary tables) lives on Drive, never git
 outputs/
+results/
 *.log
 .env
-# NOTE: results/ is intentionally TRACKED — it holds the light score tables.
 
 # OS
 .DS_Store

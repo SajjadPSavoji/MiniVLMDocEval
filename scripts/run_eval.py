@@ -21,7 +21,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))  # make `minivlmdoceval` importable when run as a script
-from minivlmdoceval.config import BUILTIN_MODELS, DATASETS, DEFAULT_WORK_DIR, RESULTS_DIR
+from minivlmdoceval.config import BUILTIN_MODELS, DATASETS, DEFAULT_WORK_DIR, SUMMARY_SUBDIR
 
 RUNPY = REPO_ROOT / "external" / "VLMEvalKit" / "run.py"
 
@@ -65,14 +65,14 @@ def write_results(work_dir):
         print("No status.json found yet — nothing to aggregate.")
         return
     df, pivot = out
-    rdir = REPO_ROOT / RESULTS_DIR
-    rdir.mkdir(exist_ok=True)
+    rdir = Path(work_dir) / SUMMARY_SUBDIR  # summary lives under the (Drive) work-dir
+    rdir.mkdir(parents=True, exist_ok=True)
     df.to_csv(rdir / "scores_long.csv", index=False)
     pivot.to_csv(rdir / "comparison.csv")
     (rdir / "comparison.md").write_text(pivot.to_markdown())
     print("\n=== comparison (model x benchmark, primary metric) ===")
     print(pivot.to_string())
-    print(f"\nwrote {RESULTS_DIR}/comparison.csv, comparison.md, scores_long.csv")
+    print(f"\nwrote summary tables to {rdir}")
 
 
 def main():

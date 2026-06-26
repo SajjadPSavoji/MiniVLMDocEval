@@ -19,9 +19,11 @@ DATASETS = [
     "TableVQABench",  # table structure reasoning       -> accuracy
 ]
 
-# Output locations.
-# Heavy predictions/resume-state: point at Google Drive on Colab to survive
-# session disconnects (and enable VLMEvalKit --reuse). The light score tables go
-# to RESULTS_DIR (git-tracked) for sharing.
+# Output location.
+# EVERYTHING is written under the run work-dir — both the heavy predictions and
+# the aggregated summary tables. On Colab, point --work-dir at Google Drive so it
+# all persists across sessions (and enables VLMEvalKit --reuse).
+#   predictions/status -> <work_dir>/<model>/<eval_id>/...
+#   summary tables     -> <work_dir>/<SUMMARY_SUBDIR>/comparison.{csv,md}, scores_long.csv
 DEFAULT_WORK_DIR = "outputs"
-RESULTS_DIR = "results"
+SUMMARY_SUBDIR = "summary"
