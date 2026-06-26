@@ -46,6 +46,27 @@ the local↔cloud boundary through **git** (Claude edits local `.py` → push �
 > Setup targets **Linux/Colab**. The eval needs CUDA, so it does not run on mac
 > (VLMEvalKit's wrappers are CUDA-bound); local mac is not a supported run target.
 
+## Running the full evaluation
+
+`scripts/run_eval.py` runs the built-in models (`minivlmdoceval/config.py`) on
+the **full** benchmark suite via VLMEvalKit, then aggregates per-(model, dataset)
+primary metrics into `results/comparison.{csv,md}` (refreshed after each model).
+
+Full runs are large (~13k samples/model) and span multiple Colab sessions, so:
+
+- **Heavy predictions + resume state → Google Drive** (`--work-dir`), not git.
+  VLMEvalKit `--reuse` resumes from there after a disconnect.
+- **Light score tables → git** (`results/`), pushed with `scripts/push_results.sh`.
+
+In the Colab T4 terminal:
+
+```bash
+# mount Drive once (in a notebook cell): from google.colab import drive; drive.mount('/content/drive')
+cd /content/MiniVLMDocEval && git pull
+python scripts/run_eval.py --work-dir /content/drive/MyDrive/MiniVLMDocEval/outputs
+GH_TOKEN=<pat> bash scripts/push_results.sh    # publish the score tables
+```
+
 ## Status
 
 Active development — see the **Execution Steps** in [research_plan.md](research_plan.md) for current progress.
