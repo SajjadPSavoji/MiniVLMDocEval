@@ -1,24 +1,34 @@
 #!/usr/bin/env python
-"""End-to-end smoke test for the VLMEvalKit eval path on a few samples.
+"""End-to-end smoke test for the VLMEvalKit eval path on small subsets.
 
-Loads ONE model, builds ONE dataset, runs inference on the first N rows
-(mirroring vlmeval/inference.py), prints predictions, and optionally scores the
-subset. Purpose: confirm the kit runs end-to-end on Colab GPU before committing
-to a full run. Device-agnostic so wrapper plumbing can also be checked on mac.
+By default this runs every built-in model from minivlmdoceval.config across every
+configured dataset, taking the first 10 rows from each dataset. It mirrors
+vlmeval/inference.py prompt construction, prints predictions, and optionally
+scores each subset. Purpose: confirm the kit runs end-to-end on Colab GPU before
+committing to a full run. Device-agnostic so wrapper plumbing can also be checked
+on mac.
 
 Note: VLMEvalKit's built-in model wrappers hardcode CUDA, so for those this
 script is Colab/GPU-only. Our own custom wrappers (FastVLM, Qwen3.5) will be
 written device-agnostic and can be smoke-tested on mac (mps/cpu).
 
 Usage:
+  python scripts/smoke_test.py --score
   python scripts/smoke_test.py --model SmolVLM2-500M --data OCRBench --n 5 --score
 """
 import argparse
+import gc
 import os
+import sys
 import tempfile
 import traceback
+from pathlib import Path
 
 import torch
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO_ROOT))
+from minivlmdoceval.config import BUILTIN_MODELS, DATASETS
 
 
 def build_struct(model, dataset, dataset_name, line):
@@ -30,50 +40,38 @@ def build_struct(model, dataset, dataset_name, line):
     return dataset.build_prompt(line)
 
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--model", default="SmolVLM2-500M", help="key in vlmeval supported_VLM registry")
-    ap.add_argument("--data", default="OCRBench", help="VLMEvalKit dataset name")
-    ap.add_argument("--n", type=int, default=5, help="number of samples to run")
-    ap.add_argument("--score", action="store_true", help="also run dataset.evaluate on the subset (indicative only)")
-    args = ap.parse_args()
-
-    from vlmeval.config import supported_VLM
+def run_one_dataset(model, model_name, dataset_name, n, score):
     from vlmeval.dataset import build_dataset
 
-    print(f"[env] cuda={torch.cuda.is_available()} mps={torch.backends.mps.is_available()}")
-    assert args.model in supported_VLM, f"{args.model!r} not in registry"
-
-    print(f"[1/3] loading model: {args.model}")
-    model = supported_VLM[args.model]()
-
-    print(f"[2/3] building dataset: {args.data}")
-    dataset = build_dataset(args.data)
+    print(f"\n--- dataset: {dataset_name} | n={n} ---")
+    print(f"[2/3] building dataset: {dataset_name}")
+    dataset = build_dataset(dataset_name)
     if hasattr(model, "set_dump_image"):
         model.set_dump_image(dataset.dump_image)
 
-    data = dataset.data.head(args.n).reset_index(drop=True)
+    data = dataset.data.head(n).reset_index(drop=True)
     print(f"[3/3] running inference on {len(data)} samples\n")
 
     preds = []
     for i in range(len(data)):
         line = data.iloc[i]
-        struct = build_struct(model, dataset, args.data, line)
-        resp = model.generate(message=struct, dataset=args.data)
+        struct = build_struct(model, dataset, dataset_name, line)
+        resp = model.generate(message=struct, dataset=dataset_name)
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
         q = str(line.get("question", ""))[:70]
         print(f"  [{i}] Q={q!r}\n      PRED={resp!r}")
         preds.append(resp)
 
-    print("\nSMOKE_OK: model loaded, dataset built, inference ran end-to-end.")
+    print(f"\nSMOKE_OK: {model_name} | {dataset_name} | {len(data)} samples")
 
-    if args.score:
+    if score:
         try:
             from vlmeval.smp import dump
+
             sub = data.copy()
             sub["prediction"] = preds
-            tmp = os.path.join(tempfile.gettempdir(), f"smoke_{args.model}_{args.data}.xlsx")
+            tmp = os.path.join(tempfile.gettempdir(), f"smoke_{model_name}_{dataset_name}.xlsx")
             dump(sub, tmp)
             print("\n[score] running dataset.evaluate on the subset (indicative only):")
             res = dataset.evaluate(tmp)
@@ -81,6 +79,89 @@ def main():
         except Exception:
             print("\n[score] scoring step failed (non-fatal for the smoke test):")
             traceback.print_exc()
+
+    return len(data)
+
+
+def parse_args():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--model", help="single VLMEvalKit model key to run")
+    ap.add_argument("--models", nargs="+", help="model keys to run (default: all built-in models)")
+    ap.add_argument("--data", nargs="+", help="dataset names to run (default: all configured datasets)")
+    ap.add_argument("--n", type=int, default=10, help="number of samples per dataset")
+    ap.add_argument("--score", action="store_true", help="also run dataset.evaluate on each subset (indicative only)")
+    ap.add_argument("--fail-fast", action="store_true", help="stop on the first model/dataset failure")
+    args = ap.parse_args()
+    if args.model and args.models:
+        ap.error("use either --model or --models, not both")
+    return args
+
+
+def main():
+    args = parse_args()
+
+    from vlmeval.config import supported_VLM
+
+    models = args.models or ([args.model] if args.model else BUILTIN_MODELS)
+    datasets = args.data or DATASETS
+
+    print(f"[env] cuda={torch.cuda.is_available()} mps={torch.backends.mps.is_available()}")
+    print(f"[plan] models={models}")
+    print(f"[plan] datasets={datasets}")
+    print(f"[plan] samples_per_dataset={args.n} score={args.score}\n")
+
+    failures = []
+    completed = []
+    for model_name in models:
+        if model_name not in supported_VLM:
+            msg = f"{model_name!r} not in VLMEvalKit registry"
+            print(f"\nSMOKE_FAIL: {msg}")
+            failures.append((model_name, "*", msg))
+            if args.fail_fast:
+                break
+            continue
+
+        print(f"\n=== model: {model_name} ===")
+        print(f"[1/3] loading model: {model_name}")
+        try:
+            model = supported_VLM[model_name]()
+        except Exception as exc:
+            print(f"\nSMOKE_FAIL: {model_name} failed to load")
+            traceback.print_exc()
+            failures.append((model_name, "*", repr(exc)))
+            if args.fail_fast:
+                break
+            continue
+
+        for dataset_name in datasets:
+            try:
+                n_ran = run_one_dataset(model, model_name, dataset_name, args.n, args.score)
+                completed.append((model_name, dataset_name, n_ran))
+            except Exception as exc:
+                print(f"\nSMOKE_FAIL: {model_name} | {dataset_name}")
+                traceback.print_exc()
+                failures.append((model_name, dataset_name, repr(exc)))
+                if args.fail_fast:
+                    break
+
+        del model
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        gc.collect()
+        if failures and args.fail_fast:
+            break
+
+    print("\n=== smoke summary ===")
+    for model_name, dataset_name, n_ran in completed:
+        print(f"OK   {model_name} | {dataset_name} | {n_ran} samples")
+
+    if failures:
+        print("\nFailures:")
+        for model_name, dataset_name, err in failures:
+            print(f"FAIL {model_name} | {dataset_name} | {err}")
+        raise SystemExit(1)
+
+    print("\nSMOKE_OK: all requested model/dataset subsets ran end-to-end.")
 
 
 if __name__ == "__main__":
