@@ -19,11 +19,13 @@ DATASETS = [
     "TableVQABench",  # table structure reasoning       -> accuracy
 ]
 
-# Output location.
-# EVERYTHING is written under the run work-dir — both the heavy predictions and
-# the aggregated summary tables. On Colab, point --work-dir at Google Drive so it
-# all persists across sessions (and enables VLMEvalKit --reuse).
-#   predictions/status -> <work_dir>/<model>/<eval_id>/...
-#   summary tables     -> <work_dir>/<SUMMARY_SUBDIR>/comparison.{csv,md}, scores_long.csv
-DEFAULT_WORK_DIR = "outputs"
+# Output tree. EVERYTHING is written under a single base dir (`--out`), so the
+# code runs on any system; on Colab point --out at Google Drive so it persists
+# across sessions (and enables VLMEvalKit --reuse).
+#   <out>/predictions/<model>/<eval_id>/...   VLMEvalKit work-dir (status.json, preds)
+#   <out>/summary/comparison.{csv,md}, scores_long.csv
+#   <out>/logs/<model>_<timestamp>.log        tee of each run (resume/debug)
+DEFAULT_OUT = "outputs"
+PREDICTIONS_SUBDIR = "predictions"
 SUMMARY_SUBDIR = "summary"
+LOGS_SUBDIR = "logs"

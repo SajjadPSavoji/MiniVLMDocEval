@@ -52,18 +52,25 @@ the local↔cloud boundary through **git** (Claude edits local `.py` → push �
 the **full** benchmark suite via VLMEvalKit, then aggregates per-(model, dataset)
 primary metrics into a comparison table (refreshed after each model).
 
-**Everything is written under the `--work-dir`** — both the heavy predictions and
-the `summary/comparison.{csv,md}` tables. Point it at **Google Drive** so all of
-it persists across Colab sessions (and VLMEvalKit `--reuse` can resume a run).
-Full runs are large (~13k samples/model) and span multiple sessions.
+**Everything is written under a single base dir (`--out`)** — so the code runs
+anywhere. On Colab point it at **Google Drive** to persist across sessions (and
+let VLMEvalKit `--reuse` resume). Full runs are large (~13k samples/model) and
+span multiple sessions.
+
+```
+<out>/
+  predictions/   VLMEvalKit work-dir (status.json + preds) — drives --reuse
+  summary/       comparison.{csv,md}, scores_long.csv
+  logs/          <model>_<timestamp>.log   (tee of each run, for debug)
+```
 
 In the Colab T4 terminal (after mounting Drive in a notebook cell:
 `from google.colab import drive; drive.mount('/content/drive')`):
 
 ```bash
 cd /content/MiniVLMDocEval && git pull
-python scripts/run_eval.py --work-dir /content/drive/MyDrive/MiniVLMDocEval/outputs
-# table is printed to the terminal AND saved to <work-dir>/summary/comparison.md
+python scripts/run_eval.py --out /content/drive/MyDrive/MiniVLMDocEval/outputs
+# table is printed to the terminal AND saved to <out>/summary/comparison.md
 ```
 
 ## Status
