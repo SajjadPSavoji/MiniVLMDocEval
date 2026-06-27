@@ -102,6 +102,28 @@ def apply_gen_cap(model, max_new_tokens, logf):
         log(f"  [warn] {type(model).__name__} has no .kwargs dict; max_new_tokens not applied", logf)
 
 
+def apply_fp16(model, enabled, logf):
+    """Lever C (selective): downcast fp32 models to fp16. bf16/fp16 models are left
+    at their native precision — avoids bf16->fp16 instability (e.g. InternVL). With
+    our 3 built-ins this converts only SmolVLM (the lone fp32 wrapper)."""
+    if not enabled:
+        return
+    import torch
+    inner = getattr(model, "model", None)
+    if inner is None or not hasattr(inner, "parameters"):
+        log("  [fp16] no .model module to convert; skipped", logf)
+        return
+    try:
+        dtype = next(inner.parameters()).dtype
+    except StopIteration:
+        return
+    if dtype == torch.float32:
+        inner.half()
+        log(f"  [fp16] {type(model).__name__}: fp32 -> fp16", logf)
+    else:
+        log(f"  [fp16] {type(model).__name__}: left at {dtype} (already 16-bit)", logf)
+
+
 def run_pair(model, model_name, dataset_name, n, preds_dir, logf):
     from vlmeval.dataset import build_dataset
     from vlmeval.smp import dump
@@ -181,6 +203,8 @@ def main():
     ap.add_argument("--n", type=int, default=DEFAULT_N, help="samples per dataset")
     ap.add_argument("--max-new-tokens", type=int, default=DEFAULT_MAX_NEW_TOKENS,
                     help="cap generation length (Lever A); set 0 to leave the wrapper default")
+    ap.add_argument("--fp16", action="store_true",
+                    help="downcast fp32 models to fp16 (Lever C; auto-targets SmolVLM, leaves bf16/fp16 as-is)")
     ap.add_argument("--no-reuse", action="store_true", help="recompute pairs even if a score exists")
     ap.add_argument("--aggregate-only", action="store_true", help="skip running; just rebuild the table")
     args = ap.parse_args()
@@ -213,6 +237,7 @@ def main():
                 log(f"FAIL load {model_name}\n{traceback.format_exc()}", logf)
                 continue
             apply_gen_cap(model, args.max_new_tokens or None, logf)  # Lever A
+            apply_fp16(model, args.fp16, logf)                       # Lever C (selective)
 
             for dataset_name in args.data:
                 score_file = preds_dir / model_name / f"{dataset_name}_n{args.n}_score.json"
