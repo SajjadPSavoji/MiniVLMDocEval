@@ -2,7 +2,7 @@
 """End-to-end smoke test for the VLMEvalKit eval path on small subsets.
 
 By default this runs every built-in model from minivlmdoceval.config across every
-configured dataset, taking the first 10 rows from each dataset. It mirrors
+configured dataset, taking 10 rows from each dataset. It mirrors
 vlmeval/inference.py prompt construction, prints predictions, and optionally
 scores each subset. Purpose: confirm the kit runs end-to-end on Colab GPU before
 committing to a full run. Device-agnostic so wrapper plumbing can also be checked
@@ -24,6 +24,7 @@ import tempfile
 import traceback
 from pathlib import Path
 
+import pandas as pd
 import torch
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -40,7 +41,35 @@ def build_struct(model, dataset, dataset_name, line):
     return dataset.build_prompt(line)
 
 
-def run_one_dataset(model, model_name, dataset_name, n, score):
+def subset_data(data, n):
+    """Take a small subset, preserving split coverage when a benchmark has splits."""
+    if "split" not in data.columns or data["split"].nunique(dropna=False) <= 1:
+        return data.head(n).reset_index(drop=True)
+
+    groups = list(data.groupby("split", sort=False, dropna=False))
+    per_split = n // len(groups)
+    remainder = n % len(groups)
+    parts = []
+    for idx, (_, group) in enumerate(groups):
+        take = per_split + (1 if idx < remainder else 0)
+        if take:
+            parts.append(group.head(take))
+
+    subset = pd.concat(parts) if parts else data.head(0)
+    if len(subset) < n:
+        fill = data.loc[~data.index.isin(subset.index)].head(n - len(subset))
+        subset = pd.concat([subset, fill])
+    return subset.head(n).reset_index(drop=True)
+
+
+def describe_splits(data):
+    if "split" not in data.columns:
+        return ""
+    counts = data["split"].value_counts(dropna=False).sort_index()
+    return " | splits=" + ", ".join(f"{split}:{count}" for split, count in counts.items())
+
+
+def run_one_dataset(model, model_name, dataset_name, n, score, show_tracebacks):
     from vlmeval.dataset import build_dataset
 
     print(f"\n--- dataset: {dataset_name} | n={n} ---")
@@ -49,8 +78,8 @@ def run_one_dataset(model, model_name, dataset_name, n, score):
     if hasattr(model, "set_dump_image"):
         model.set_dump_image(dataset.dump_image)
 
-    data = dataset.data.head(n).reset_index(drop=True)
-    print(f"[3/3] running inference on {len(data)} samples\n")
+    data = subset_data(dataset.data, n)
+    print(f"[3/3] running inference on {len(data)} samples{describe_splits(data)}\n")
 
     preds = []
     for i in range(len(data)):
@@ -78,7 +107,9 @@ def run_one_dataset(model, model_name, dataset_name, n, score):
             print(res)
         except Exception:
             print("\n[score] scoring step failed (non-fatal for the smoke test):")
-            traceback.print_exc()
+            print(traceback.format_exc(limit=1).strip())
+            if show_tracebacks:
+                traceback.print_exc()
 
     return len(data)
 
@@ -91,6 +122,7 @@ def parse_args():
     ap.add_argument("--n", type=int, default=10, help="number of samples per dataset")
     ap.add_argument("--score", action="store_true", help="also run dataset.evaluate on each subset (indicative only)")
     ap.add_argument("--fail-fast", action="store_true", help="stop on the first model/dataset failure")
+    ap.add_argument("--tracebacks", action="store_true", help="print full tracebacks for failures")
     args = ap.parse_args()
     if args.model and args.models:
         ap.error("use either --model or --models, not both")
@@ -127,7 +159,10 @@ def main():
             model = supported_VLM[model_name]()
         except Exception as exc:
             print(f"\nSMOKE_FAIL: {model_name} failed to load")
-            traceback.print_exc()
+            if args.tracebacks:
+                traceback.print_exc()
+            else:
+                print(f"{type(exc).__name__}: {exc}")
             failures.append((model_name, "*", repr(exc)))
             if args.fail_fast:
                 break
@@ -135,11 +170,14 @@ def main():
 
         for dataset_name in datasets:
             try:
-                n_ran = run_one_dataset(model, model_name, dataset_name, args.n, args.score)
+                n_ran = run_one_dataset(model, model_name, dataset_name, args.n, args.score, args.tracebacks)
                 completed.append((model_name, dataset_name, n_ran))
             except Exception as exc:
                 print(f"\nSMOKE_FAIL: {model_name} | {dataset_name}")
-                traceback.print_exc()
+                if args.tracebacks:
+                    traceback.print_exc()
+                else:
+                    print(f"{type(exc).__name__}: {exc}")
                 failures.append((model_name, dataset_name, repr(exc)))
                 if args.fail_fast:
                     break

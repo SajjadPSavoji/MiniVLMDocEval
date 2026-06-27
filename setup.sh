@@ -27,6 +27,9 @@ echo "VLMEvalKit pinned at $(git -C "$DIR" rev-parse --short HEAD)"
 
 # 2. Install deps + the editable package.
 pip install -r "$DIR/requirements.txt"
+# VLMEvalKit leaves transformers unpinned. Newer releases changed tied-weight
+# bookkeeping for remote-code models, which currently breaks InternVL3 loading.
+pip install "transformers<4.57"
 pip install --no-deps -e "$DIR"
 
 echo "Setup complete. Verify with:"
