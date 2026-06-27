@@ -29,3 +29,9 @@ DEFAULT_OUT = "outputs"
 PREDICTIONS_SUBDIR = "predictions"
 SUMMARY_SUBDIR = "summary"
 LOGS_SUBDIR = "logs"
+
+# Cap each dataset to N samples (full datasets are too slow on a free T4), drawn
+# with a fixed seed for reproducibility. Note: OCRBench is exactly 1000, so
+# N=1000 evaluates it in full; the others are sub-sampled.
+DEFAULT_N = 1000
+SAMPLE_SEED = 42

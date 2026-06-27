@@ -48,29 +48,35 @@ the local↔cloud boundary through **git** (Claude edits local `.py` → push �
 
 ## Running the full evaluation
 
-`scripts/run_eval.py` runs the built-in models (`minivlmdoceval/config.py`) on
-the **full** benchmark suite via VLMEvalKit, then aggregates per-(model, dataset)
-primary metrics into a comparison table (refreshed after each model).
+`scripts/run_eval.py` runs the built-in models (`minivlmdoceval/config.py`) on a
+**capped subset of N samples/dataset** (default 1000 — full datasets are too slow
+on a free T4), and aggregates per-(model, dataset) primary metrics (0-100) into a
+comparison table (refreshed after each pair).
+
+It caps via a subset loop (build dataset → fixed-seed N-row sample → infer →
+`dataset.evaluate`), because VLMEvalKit's `run.py` has no sample limit and
+truncating the cached TSV triggers an md5 re-download.
 
 **Everything is written under a single base dir (`--out`)** — so the code runs
-anywhere. On Colab point it at **Google Drive** to persist across sessions (and
-let VLMEvalKit `--reuse` resume). Full runs are large (~13k samples/model) and
-span multiple sessions.
+anywhere. On Colab point it at **Google Drive** to persist across sessions.
 
 ```
 <out>/
-  predictions/   VLMEvalKit work-dir (status.json + preds) — drives --reuse
-  summary/       comparison.{csv,md}, scores_long.csv
-  logs/          <model>_<timestamp>.log   (tee of each run, for debug)
+  predictions/<model>/<dataset>_n{N}.xlsx + _score.json   (resume marker)
+  summary/comparison.{csv,md}, scores_long.csv
+  logs/<model>_<timestamp>.log
 ```
 
-In the Colab T4 terminal (after mounting Drive in a notebook cell:
-`from google.colab import drive; drive.mount('/content/drive')`):
+Resume is per (model, dataset, N) pair — a pair with a `*_score.json` is skipped,
+so re-running after a disconnect continues where it stopped.
+
+The easiest path is the **notebook** (`notebooks/colab.ipynb`): run its cells —
+install → Drive → smoke → full eval. Or in the T4 terminal:
 
 ```bash
 cd /content/MiniVLMDocEval && git pull
-python scripts/run_eval.py --out /content/drive/MyDrive/MiniVLMDocEval/outputs
-# table is printed to the terminal AND saved to <out>/summary/comparison.md
+python scripts/run_eval.py --out /content/drive/MyDrive/MiniVLMDocEval/outputs --n 1000
+# table printed to the terminal AND saved to <out>/summary/comparison.md
 ```
 
 ## Status

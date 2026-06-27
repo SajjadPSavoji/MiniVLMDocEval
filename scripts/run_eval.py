@@ -1,100 +1,147 @@
 #!/usr/bin/env python
-"""Run the built-in models on the FULL document benchmark suite via VLMEvalKit,
-capturing per-run logs and aggregating per-(model, dataset) primary metrics.
+"""Run the built-in models on a CAPPED subset (N samples/dataset) of the document
+benchmark suite, with per-pair resume and logs, storing everything under --out.
 
-All artifacts go under a single output base (--out), so the code runs anywhere
-(local, or a Google Drive path on Colab that persists across sessions):
+Why a subset loop instead of VLMEvalKit's run.py: run.py has no sample limit, and
+truncating the cached dataset TSV triggers an md5 re-download. So we build each
+dataset, take a fixed-seed N-row sample, run inference, and call dataset.evaluate
+on that subset — reusing VLMEvalKit's models, datasets, and scorers on N rows.
 
-  <out>/predictions/<model>/<eval_id>/...   VLMEvalKit work-dir (status.json, preds)
-  <out>/summary/comparison.{csv,md}, scores_long.csv
-  <out>/logs/<model>_<timestamp>.log        tee of each run (resume/debug)
+Tree under --out (point at Google Drive on Colab so it persists):
+  predictions/<model>/<dataset>_n{N}.xlsx        predictions
+  predictions/<model>/<dataset>_n{N}_score.json  per-pair score (resume marker)
+  summary/comparison.{csv,md}, scores_long.csv
+  logs/<model>_<timestamp>.log                   per-model run log
 
-The summary table is refreshed after each model. VLMEvalKit --reuse resumes from
-<out>/predictions after a disconnect.
+Resume is per (model, dataset, N) pair: a pair with a *_score.json is skipped.
+The summary table is refreshed after each pair.
 
 Usage:
-  python scripts/run_eval.py --out /content/drive/MyDrive/MiniVLMDocEval/outputs
-  python scripts/run_eval.py --models SmolVLM2-500M --data OCRBench --out outputs
-  python scripts/run_eval.py --out outputs --aggregate-only
+  python scripts/run_eval.py --out <dir>                       # all built-ins, N=1000
+  python scripts/run_eval.py --out <dir> --n 1000 --models SmolVLM2-500M --data OCRBench
+  python scripts/run_eval.py --out <dir> --aggregate-only
 """
 import argparse
 import datetime as dt
-import subprocess
+import gc
+import json
 import sys
+import traceback
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))  # make `minivlmdoceval` importable when run as a script
 from minivlmdoceval.config import (
-    BUILTIN_MODELS, DATASETS, DEFAULT_OUT,
+    BUILTIN_MODELS, DATASETS, DEFAULT_OUT, DEFAULT_N, SAMPLE_SEED,
     PREDICTIONS_SUBDIR, SUMMARY_SUBDIR, LOGS_SUBDIR,
 )
 
-RUNPY = REPO_ROOT / "external" / "VLMEvalKit" / "run.py"
 
-
-def _tee(cmd, log_path):
-    """Run cmd, streaming merged stdout/stderr to the console AND a log file."""
-    with open(log_path, "w") as logf:
-        logf.write(f"# {dt.datetime.now().isoformat()}\n# {' '.join(map(str, cmd))}\n\n")
+def log(msg, logf=None):
+    print(msg, flush=True)
+    if logf is not None:
+        logf.write(msg + "\n")
         logf.flush()
-        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                text=True, bufsize=1)
-        for line in proc.stdout:
-            sys.stdout.write(line)
-            sys.stdout.flush()
-            logf.write(line)
-            logf.flush()
-        proc.wait()
-    if proc.returncode != 0:
-        raise subprocess.CalledProcessError(proc.returncode, cmd)
 
 
-def run_one_model(model, datasets, preds_dir, logs_dir, reuse):
-    cmd = [sys.executable, str(RUNPY), "--model", model, "--data", *datasets,
-           "--work-dir", str(preds_dir)]
-    if reuse:
-        cmd.append("--reuse")
-    ts = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
-    log_path = logs_dir / f"{model}_{ts}.log"
-    print(f"\n=== RUN {model} | {datasets} ===\nlog: {log_path}\n", flush=True)
-    _tee(cmd, log_path)
+def subset_data(data, n, seed):
+    """Fixed-seed N-row sample (full data if it already has <= N rows)."""
+    if len(data) <= n:
+        return data.reset_index(drop=True)
+    return data.sample(n=n, random_state=seed).sort_index().reset_index(drop=True)
+
+
+def build_struct(model, dataset, dataset_name, line):
+    """Replicate vlmeval/inference.py prompt construction."""
+    if getattr(dataset, "force_use_dataset_prompt", False):
+        return dataset.build_prompt(line)
+    if hasattr(model, "use_custom_prompt") and model.use_custom_prompt(dataset_name):
+        return model.build_prompt(line, dataset=dataset_name)
+    return dataset.build_prompt(line)
+
+
+def extract_primary(res):
+    """Pull a single headline metric (0-100 scale) out of a dataset.evaluate() result."""
+    import pandas as pd
+    if isinstance(res, pd.DataFrame):
+        if "Overall" in res.columns and len(res):
+            return "Overall(%)", float(res["Overall"].iloc[0])
+        if len(res):
+            row = res.iloc[0].to_dict()
+            for k in ("Overall", "Final Score", "score", "acc"):
+                if isinstance(row.get(k), (int, float)):
+                    return k, float(row[k])
+        return None, None
+    if isinstance(res, dict):
+        if isinstance(res.get("Final Score Norm"), (int, float)):   # OCRBench (0-1)
+            return "OCRBench(%)", float(res["Final Score Norm"]) * 100
+        if isinstance(res.get("Overall"), (int, float)):
+            return "Overall(%)", float(res["Overall"])
+        if isinstance(res.get("average_scores"), list):             # TableVQABench
+            vals = [v for v in res["average_scores"] if isinstance(v, (int, float))]
+            if vals:
+                m = sum(vals) / len(vals)
+                return "acc(%)", m * 100 if m <= 1 else m
+        for k, v in res.items():
+            if isinstance(v, (int, float)):
+                return k, float(v)
+    return None, None
+
+
+def run_pair(model, model_name, dataset_name, n, preds_dir, logf):
+    import torch
+    from vlmeval.dataset import build_dataset
+    from vlmeval.smp import dump
+
+    mdir = preds_dir / model_name
+    mdir.mkdir(parents=True, exist_ok=True)
+    pred_file = mdir / f"{dataset_name}_n{n}.xlsx"
+    score_file = mdir / f"{dataset_name}_n{n}_score.json"
+
+    log(f"\n--- {model_name} | {dataset_name} (n={n}) ---", logf)
+    dataset = build_dataset(dataset_name)
+    if hasattr(model, "set_dump_image"):
+        model.set_dump_image(dataset.dump_image)
+    data = subset_data(dataset.data, n, SAMPLE_SEED)
+    log(f"running {len(data)} samples", logf)
+
+    preds = []
+    t0 = dt.datetime.now()
+    for i in range(len(data)):
+        struct = build_struct(model, dataset, dataset_name, data.iloc[i])
+        preds.append(model.generate(message=struct, dataset=dataset_name))
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        if (i + 1) % 50 == 0:
+            log(f"  {i + 1}/{len(data)}  ({(dt.datetime.now() - t0).total_seconds():.0f}s)", logf)
+
+    sub = data.copy()
+    sub["prediction"] = preds
+    dump(sub, str(pred_file))
+    res = dataset.evaluate(str(pred_file))
+    metric, value = extract_primary(res)
+    rec = {"model": model_name, "benchmark": dataset_name, "n": int(len(data)),
+           "metric": metric, "value": value}
+    score_file.write_text(json.dumps(rec, indent=2, default=str))
+    log(f"  -> {metric} = {value}", logf)
+    return rec
 
 
 def aggregate(preds_dir):
-    """Scan preds_dir for VLMEvalKit status.json files; build model x benchmark table."""
-    status_files = list(Path(preds_dir).rglob("status.json"))
-    if not status_files:
-        return None  # nothing to aggregate yet — avoid importing vlmeval
+    score_files = list(Path(preds_dir).rglob("*_score.json"))
+    if not score_files:
+        return None  # nothing yet — avoid importing pandas
 
-    from vlmeval.smp import collect_run_benchmark_report, load_run_status  # needs vlmeval (Colab)
     import pandas as pd
-
-    # Read the model name from the status content (not the dir path): VLMEvalKit
-    # writes status.json at more than one nesting level, so a path-based parent
-    # name is unreliable (it can surface as the literal "predictions"). Dedupe by
-    # (model, benchmark), preferring an entry that actually has a metric value.
-    best = {}
-    for status in status_files:
-        run_dir = status.parent
-        model = load_run_status(run_dir).get("model_name") or run_dir.parent.name
-        for r in collect_run_benchmark_report(run_dir):
-            key = (model, r.get("benchmark"))
-            row = {
-                "model": model,
-                "benchmark": r.get("benchmark"),
-                "metric": r.get("primary_metric"),
-                "value": r.get("primary_metric_value"),
-                "infer_failed": r.get("infer_failed"),
-                "infer_total": r.get("infer_total"),
-            }
-            prev = best.get(key)
-            if prev is None or (prev["value"] in (None, "") and row["value"] not in (None, "")):
-                best[key] = row
-    rows = list(best.values())
-    if not rows:
+    recs = []
+    for sf in score_files:
+        try:
+            recs.append(json.loads(sf.read_text()))
+        except Exception:
+            pass
+    if not recs:
         return None
-    df = pd.DataFrame(rows).sort_values(["model", "benchmark"]).reset_index(drop=True)
+    df = pd.DataFrame(recs).sort_values(["model", "benchmark"]).reset_index(drop=True)
     pivot = df.pivot_table(index="model", columns="benchmark", values="value", aggfunc="first")
     return df, pivot
 
@@ -102,13 +149,13 @@ def aggregate(preds_dir):
 def write_results(preds_dir, summary_dir):
     out = aggregate(preds_dir)
     if out is None:
-        print("No status.json found yet — nothing to aggregate.")
+        print("No per-pair scores yet — nothing to aggregate.")
         return
     df, pivot = out
     df.to_csv(summary_dir / "scores_long.csv", index=False)
     pivot.to_csv(summary_dir / "comparison.csv")
     (summary_dir / "comparison.md").write_text(pivot.to_markdown())
-    print("\n=== comparison (model x benchmark, primary metric) ===")
+    print("\n=== comparison (model x benchmark, primary metric, 0-100) ===")
     print(pivot.to_string())
     print(f"\nwrote summary tables to {summary_dir}")
 
@@ -118,7 +165,8 @@ def main():
     ap.add_argument("--out", default=DEFAULT_OUT, help="output base dir (point at Drive on Colab)")
     ap.add_argument("--models", nargs="+", default=BUILTIN_MODELS)
     ap.add_argument("--data", nargs="+", default=DATASETS)
-    ap.add_argument("--no-reuse", action="store_true", help="disable VLMEvalKit --reuse (resume)")
+    ap.add_argument("--n", type=int, default=DEFAULT_N, help="samples per dataset")
+    ap.add_argument("--no-reuse", action="store_true", help="recompute pairs even if a score exists")
     ap.add_argument("--aggregate-only", action="store_true", help="skip running; just rebuild the table")
     args = ap.parse_args()
 
@@ -128,14 +176,45 @@ def main():
     logs_dir = out / LOGS_SUBDIR
     for d in (preds_dir, summary_dir, logs_dir):
         d.mkdir(parents=True, exist_ok=True)
-    print(f"output tree: {out}/ {{{PREDICTIONS_SUBDIR}, {SUMMARY_SUBDIR}, {LOGS_SUBDIR}}}")
+    print(f"output tree: {out}/ {{{PREDICTIONS_SUBDIR}, {SUMMARY_SUBDIR}, {LOGS_SUBDIR}}}  N={args.n}")
 
-    if not args.aggregate_only:
-        for model in args.models:
-            run_one_model(model, args.data, preds_dir, logs_dir, reuse=not args.no_reuse)
-            write_results(preds_dir, summary_dir)  # refresh table after each model
-    else:
+    if args.aggregate_only:
         write_results(preds_dir, summary_dir)
+        return
+
+    from vlmeval.config import supported_VLM
+    import torch
+
+    for model_name in args.models:
+        ts = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
+        with open(logs_dir / f"{model_name}_{ts}.log", "w") as logf:
+            if model_name not in supported_VLM:
+                log(f"SKIP {model_name}: not in VLMEvalKit registry", logf)
+                continue
+            log(f"=== loading {model_name} ===", logf)
+            try:
+                model = supported_VLM[model_name]()
+            except Exception:
+                log(f"FAIL load {model_name}\n{traceback.format_exc()}", logf)
+                continue
+
+            for dataset_name in args.data:
+                score_file = preds_dir / model_name / f"{dataset_name}_n{args.n}_score.json"
+                if score_file.exists() and not args.no_reuse:
+                    log(f"reuse {model_name} | {dataset_name} (score exists)", logf)
+                    continue
+                try:
+                    run_pair(model, model_name, dataset_name, args.n, preds_dir, logf)
+                    write_results(preds_dir, summary_dir)  # refresh after each pair
+                except Exception:
+                    log(f"FAIL {model_name} | {dataset_name}\n{traceback.format_exc()}", logf)
+
+            del model
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            gc.collect()
+
+    write_results(preds_dir, summary_dir)
 
 
 if __name__ == "__main__":
