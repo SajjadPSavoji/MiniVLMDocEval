@@ -157,13 +157,16 @@ def run_pair(model, model_name, dataset_name, n, preds_dir, logf):
         if (i + 1) % 50 == 0:
             log(f"  {i + 1}/{len(data)}  ({(dt.datetime.now() - t0).total_seconds():.0f}s)", logf)
 
+    gen_seconds = (dt.datetime.now() - t0).total_seconds()  # generation-only wall time
     sub = data.copy()
     sub["prediction"] = preds
     dump(sub, str(pred_file))
     res = dataset.evaluate(str(pred_file))
     metric, value = extract_primary(res, len(data))
     rec = {"model": model_name, "benchmark": dataset_name, "n": int(len(data)),
-           "metric": metric, "value": value}
+           "metric": metric, "value": value,
+           "seconds": round(gen_seconds, 1),
+           "s_per_sample": round(gen_seconds / max(len(data), 1), 3)}
     score_file.write_text(json.dumps(rec, indent=2, default=str))
     log(f"  -> {metric} = {value}", logf)
     return rec

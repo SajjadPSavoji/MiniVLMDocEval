@@ -161,3 +161,21 @@ This sequencing is itself a defensible choice: **let the data decide which "beyo
 **✅ Smoke test PASSED on Colab T4 (2026-06-26):** `SmolVLM2-500M` × `OCRBench` × 5 samples ran end-to-end — `cuda=True`, model + 114MB dataset downloaded, inference produced answers, scorer ran (4/5 text-recognition). Confirmed: VLMEvalKit's built-in wrappers default to **greedy** (`do_sample=False`) — matches our determinism decision. The setup recipe (clone @ pinned commit → editable install) works on Colab.
 
 *Next:* (a) confirm the other 2 built-ins run (`InternVL3-1B`, `llava_onevision_qwen2_0.5b_si`) — same one-line loop; (b) write the 2 custom wrappers (FastVLM, Qwen3.5) + add the LFM2.5-VL-450M config key; (c) build the config-driven runner + seeded ~500/benchmark subset + results aggregation for the full 6×5 comparison table.
+
+### Step 3.1 — Inference efficiency & precision
+
+Free-T4 inference was the bottleneck (full datasets ≈ 10 h). We capped each dataset to **N=1000** (fixed seed 42) and applied the speedups below. The GPU was **compute/power-bound** (100% util, pinned at the 70 W cap) with **12 GB VRAM free** — so the wins came from *more efficient work*, not from filling memory (parallel jobs / bigger batches don't help under a power cap; vLLM batching isn't supported for these wrappers).
+
+| Lever | Change (our code, no fork) | Measured effect | Consequence / status |
+|---|---|---|---|
+| **A — generation cap** | `max_new_tokens` 2048→**128** via `model.kwargs` | **Accuracy-neutral** (identical scores, see ablation); ~0 latency on SmolVLM (137 vs 138 s) — it emits EOS early | Kept as a cheap **guardrail** vs. runaway generation |
+| **B — no per-sample `empty_cache`** | removed `torch.cuda.empty_cache()` from the loop | Small (~5–15%, not isolated) — drops a per-iteration GPU sync | Safe at batch-1 with sub-1B models |
+| **C — fp16 (selective)** | downcast **fp32** wrappers → fp16 (`model.model.half()`); targets SmolVLM only | **~1.8× faster**: OCRBench n=100 **209 s → 116 s** | Validated; bf16/fp16 models left at native precision |
+
+**Ablations / sanity checks (SmolVLM2-500M, n=100):**
+- **fp16 vs fp32** (OCRBench): **209 s → 116 s = 1.8×**; score 57% → 62% on the *same* 100 (precision variation, ≈1 SE at n=100; shrinks at n=1000). fp16 produced valid outputs (no NaN/crash — inputs auto-cast).
+- **max_new_tokens 128 vs 2048** (DocVQA + InfoVQA): **identical** scores (DocVQA 76.597, InfoVQA 32.933) *and* identical time (137 vs 138 s) → the 128 cap truncates nothing and is the real-world latency floor only when a model over-generates.
+
+**Precision for comparability (our position):** precision is a confound, so it should be **held constant** — the target common precision is **16-bit (fp16)**, which is also the realistic edge-deployment format (no one deploys sub-1B VLMs in fp32). Current state: SmolVLM **fp16**, InternVL **bf16**, LLaVA-OV **fp16** — all 16-bit. We do *not* force InternVL bf16→fp16 because fp16's narrow range can destabilize a bf16-native model (NaNs); strict uniform-fp16 would require validating InternVL's fp16 stability first. The **per-model precision is reported** in the methodology, and we log per-pair `seconds`/`s_per_sample` to support the latency comparison.
+
+*Reproducibility:* `scripts/efficiency_ablation.py` re-runs both ablations and prints the score + gen-time tables; the Colab notebook runs it right after the smoke test.
