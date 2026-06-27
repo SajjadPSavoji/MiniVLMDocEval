@@ -67,25 +67,34 @@ def aggregate(preds_dir):
     if not status_files:
         return None  # nothing to aggregate yet — avoid importing vlmeval
 
-    from vlmeval.smp import collect_run_benchmark_report  # needs vlmeval (Colab)
+    from vlmeval.smp import collect_run_benchmark_report, load_run_status  # needs vlmeval (Colab)
     import pandas as pd
 
-    rows = []
+    # Read the model name from the status content (not the dir path): VLMEvalKit
+    # writes status.json at more than one nesting level, so a path-based parent
+    # name is unreliable (it can surface as the literal "predictions"). Dedupe by
+    # (model, benchmark), preferring an entry that actually has a metric value.
+    best = {}
     for status in status_files:
         run_dir = status.parent
-        model = run_dir.parent.name  # layout: predictions/<model>/<eval_id>/status.json
+        model = load_run_status(run_dir).get("model_name") or run_dir.parent.name
         for r in collect_run_benchmark_report(run_dir):
-            rows.append({
+            key = (model, r.get("benchmark"))
+            row = {
                 "model": model,
                 "benchmark": r.get("benchmark"),
                 "metric": r.get("primary_metric"),
                 "value": r.get("primary_metric_value"),
                 "infer_failed": r.get("infer_failed"),
                 "infer_total": r.get("infer_total"),
-            })
+            }
+            prev = best.get(key)
+            if prev is None or (prev["value"] in (None, "") and row["value"] not in (None, "")):
+                best[key] = row
+    rows = list(best.values())
     if not rows:
         return None
-    df = pd.DataFrame(rows)
+    df = pd.DataFrame(rows).sort_values(["model", "benchmark"]).reset_index(drop=True)
     pivot = df.pivot_table(index="model", columns="benchmark", values="value", aggfunc="first")
     return df, pivot
 
