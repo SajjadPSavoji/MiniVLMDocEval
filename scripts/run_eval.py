@@ -60,9 +60,18 @@ def build_struct(model, dataset, dataset_name, line):
     return dataset.build_prompt(line)
 
 
-def extract_primary(res):
-    """Pull a single headline metric (0-100 scale) out of a dataset.evaluate() result."""
+def extract_primary(res, n):
+    """Pull a single headline metric on a 0-100 (accuracy %) scale out of a
+    dataset.evaluate() result. `n` = number of samples evaluated.
+
+    Note: OCRBench's 'Final Score' is a raw count of correct answers, and its
+    'Final Score Norm' (=Final Score/10) is hardcoded for the full 1000-question
+    set — wrong for subsets. So we normalize by the actual N: correct/N*100.
+    ImageVQA's 'Overall' and TableVQA's 'average_scores' are already per-subset.
+    """
     import pandas as pd
+    if isinstance(res, dict) and isinstance(res.get("Final Score"), (int, float)):  # OCRBench
+        return "acc(%)", float(res["Final Score"]) / max(n, 1) * 100
     if isinstance(res, pd.DataFrame):
         if "Overall" in res.columns and len(res):
             return "Overall(%)", float(res["Overall"].iloc[0])
@@ -73,8 +82,6 @@ def extract_primary(res):
                     return k, float(row[k])
         return None, None
     if isinstance(res, dict):
-        if isinstance(res.get("Final Score Norm"), (int, float)):   # OCRBench (0-1)
-            return "OCRBench(%)", float(res["Final Score Norm"]) * 100
         if isinstance(res.get("Overall"), (int, float)):
             return "Overall(%)", float(res["Overall"])
         if isinstance(res.get("average_scores"), list):             # TableVQABench
@@ -154,7 +161,7 @@ def run_pair(model, model_name, dataset_name, n, preds_dir, logf):
     sub["prediction"] = preds
     dump(sub, str(pred_file))
     res = dataset.evaluate(str(pred_file))
-    metric, value = extract_primary(res)
+    metric, value = extract_primary(res, len(data))
     rec = {"model": model_name, "benchmark": dataset_name, "n": int(len(data)),
            "metric": metric, "value": value}
     score_file.write_text(json.dumps(rec, indent=2, default=str))
