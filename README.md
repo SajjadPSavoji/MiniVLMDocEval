@@ -70,6 +70,10 @@ anywhere. On Colab point it at **Google Drive** to persist across sessions.
 Resume is per (model, dataset, N) pair — a pair with a `*_score.json` is skipped,
 so re-running after a disconnect continues where it stopped.
 
+Decoding is deterministic (greedy, the wrappers' default) and generation is capped
+at `--max-new-tokens` (default 128) — our benchmarks are short-answer, so this is
+safe and avoids wasting time decoding toward the wrappers' 2048 default.
+
 The easiest path is the **notebook** (`notebooks/colab.ipynb`): run its cells —
 install → Drive → smoke → full eval. Or in the T4 terminal:
 

@@ -32,7 +32,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))  # make `minivlmdoceval` importable when run as a script
 from minivlmdoceval.config import (
-    BUILTIN_MODELS, DATASETS, DEFAULT_OUT, DEFAULT_N, SAMPLE_SEED,
+    BUILTIN_MODELS, DATASETS, DEFAULT_OUT, DEFAULT_N, SAMPLE_SEED, DEFAULT_MAX_NEW_TOKENS,
     PREDICTIONS_SUBDIR, SUMMARY_SUBDIR, LOGS_SUBDIR,
 )
 
@@ -88,8 +88,21 @@ def extract_primary(res):
     return None, None
 
 
+def apply_gen_cap(model, max_new_tokens, logf):
+    """Lever A: cap generation length on the loaded model (wrappers default 2048).
+    All built-in wrappers store gen config in self.kwargs['max_new_tokens']."""
+    if max_new_tokens is None:
+        return
+    kw = getattr(model, "kwargs", None)
+    if isinstance(kw, dict):
+        old = kw.get("max_new_tokens")
+        kw["max_new_tokens"] = max_new_tokens
+        log(f"  max_new_tokens: {old} -> {max_new_tokens}", logf)
+    else:
+        log(f"  [warn] {type(model).__name__} has no .kwargs dict; max_new_tokens not applied", logf)
+
+
 def run_pair(model, model_name, dataset_name, n, preds_dir, logf):
-    import torch
     from vlmeval.dataset import build_dataset
     from vlmeval.smp import dump
 
@@ -105,13 +118,13 @@ def run_pair(model, model_name, dataset_name, n, preds_dir, logf):
     data = subset_data(dataset.data, n, SAMPLE_SEED)
     log(f"running {len(data)} samples", logf)
 
+    # Lever B: no per-sample torch.cuda.empty_cache() — it forces a sync + cache
+    # churn every iteration for no benefit at batch-1 with these tiny models.
     preds = []
     t0 = dt.datetime.now()
     for i in range(len(data)):
         struct = build_struct(model, dataset, dataset_name, data.iloc[i])
         preds.append(model.generate(message=struct, dataset=dataset_name))
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
         if (i + 1) % 50 == 0:
             log(f"  {i + 1}/{len(data)}  ({(dt.datetime.now() - t0).total_seconds():.0f}s)", logf)
 
@@ -166,6 +179,8 @@ def main():
     ap.add_argument("--models", nargs="+", default=BUILTIN_MODELS)
     ap.add_argument("--data", nargs="+", default=DATASETS)
     ap.add_argument("--n", type=int, default=DEFAULT_N, help="samples per dataset")
+    ap.add_argument("--max-new-tokens", type=int, default=DEFAULT_MAX_NEW_TOKENS,
+                    help="cap generation length (Lever A); set 0 to leave the wrapper default")
     ap.add_argument("--no-reuse", action="store_true", help="recompute pairs even if a score exists")
     ap.add_argument("--aggregate-only", action="store_true", help="skip running; just rebuild the table")
     args = ap.parse_args()
@@ -197,6 +212,7 @@ def main():
             except Exception:
                 log(f"FAIL load {model_name}\n{traceback.format_exc()}", logf)
                 continue
+            apply_gen_cap(model, args.max_new_tokens or None, logf)  # Lever A
 
             for dataset_name in args.data:
                 score_file = preds_dir / model_name / f"{dataset_name}_n{args.n}_score.json"

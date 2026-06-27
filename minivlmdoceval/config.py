@@ -35,3 +35,7 @@ LOGS_SUBDIR = "logs"
 # N=1000 evaluates it in full; the others are sub-sampled.
 DEFAULT_N = 1000
 SAMPLE_SEED = 42
+
+# Cap generation length (the wrappers default to 2048, which wastes time on our
+# short-answer benchmarks). 128 is safe for word/number/phrase answers.
+DEFAULT_MAX_NEW_TOKENS = 128
