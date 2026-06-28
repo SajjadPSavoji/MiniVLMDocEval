@@ -179,3 +179,66 @@ Free-T4 inference was the bottleneck (full datasets ≈ 10 h). We capped each da
 **Precision for comparability (our position):** precision is a confound, so it should be **held constant** — the target common precision is **16-bit (fp16)**, which is also the realistic edge-deployment format (no one deploys sub-1B VLMs in fp32). Current state: SmolVLM **fp16**, InternVL **bf16**, LLaVA-OV **fp16** — all 16-bit. We do *not* force InternVL bf16→fp16 because fp16's narrow range can destabilize a bf16-native model (NaNs); strict uniform-fp16 would require validating InternVL's fp16 stability first. The **per-model precision is reported** in the methodology, and we log per-pair `seconds`/`s_per_sample` to support the latency comparison.
 
 *Reproducibility:* `scripts/efficiency_ablation.py` re-runs both ablations and prints the score + gen-time tables; the Colab notebook runs it right after the smoke test.
+
+## 5. Part 1 — Results & Analysis
+
+### 5.1 Experimental setup (summary)
+
+- **Models (3 of 6 shortlisted):** the VLMEvalKit-native built-ins — `InternVL3-1B` (InternViT-300M + Qwen2.5-0.5B), `LLaVA-OneVision-0.5b-ov-hf` (SigLIP + Qwen2-0.5B), `SmolVLM2-500M` (SigLIP + SmolLM2-360M). Custom-wrapper models (FastVLM, Qwen3.5-0.8B, LFM2.5-VL-450M) are deferred to a later iteration.
+- **Benchmarks (5):** OCRBench, DocVQA (val), ChartQA (test), InfoVQA (val), TableVQABench — **N = 1000 fixed-seed (42) subsample** each (OCRBench has exactly 1000 → evaluated in full).
+- **Metrics, normalized to 0–100:** OCRBench = accuracy (correct/N·100); DocVQA & InfoVQA = ANLS·100; ChartQA = relaxed accuracy (±5%); TableVQA = accuracy (mean over its 4 sub-domains). Each column is a single metric, so columns are internally comparable.
+- **Inference:** single NVIDIA **T4** (Colab); **greedy** decoding (`do_sample=False`); `max_new_tokens=128` (ablated accuracy-neutral, §3.1); **16-bit** precision (SmolVLM/LLaVA fp16, InternVL bf16). Per-pair generation wall-time recorded.
+
+### 5.2 Results
+
+**Accuracy (0–100; higher better). Bold = best per column.**
+
+| Model | ChartQA | DocVQA | InfoVQA | OCRBench | TableVQA | **Mean** |
+|---|---|---|---|---|---|---|
+| **InternVL3-1B** | **68.8** | **80.8** | **54.2** | **79.4** | 33.5 | **63.3** |
+| LLaVA-OV-0.5b | 60.0 | 70.4 | 39.0 | 60.2 | **34.4** | 52.8 |
+| SmolVLM2-500M | 60.4 | 67.8 | 27.4 | 61.0 | 30.3 | 49.4 |
+
+**Latency (seconds/sample on T4; lower better).**
+
+| Model | ChartQA | DocVQA | InfoVQA | OCRBench | TableVQA | **Mean** |
+|---|---|---|---|---|---|---|
+| InternVL3-1B | 0.69 | 1.47 | 1.84 | 1.46 | 0.47 | **1.19** |
+| SmolVLM2-500M | 0.72 | 0.96 | 0.70 | 0.83 | 0.66 | 0.77 |
+| LLaVA-OV-0.5b | 0.46 | 1.35 | 0.83 | 0.95 | 0.57 | 0.83 |
+
+### 5.3 Analysis
+
+**By benchmark (the diagnostic ladder):**
+- **OCRBench (raw reading):** InternVL **79.4** vs ~60 — a ~19-pt gap. Reading fidelity scales with vision-encoder capacity; the two 0.5B models lag well behind the InternViT-300M encoder.
+- **DocVQA (read + locate):** 80.8 vs 68–70. ANLS is edit-distance tolerant, so all three "read" documents adequately; InternVL leads.
+- **ChartQA (numeric reasoning):** the **tightest** spread (60–69) — chart QA is the least encoder-bound task.
+- **InfoVQA (layout + multi-hop):** the **most discriminating** task — 27 → 39 → 54, the widest spread. High resolution and layout reasoning separate the models; SmolVLM's aggressive token compression is the clear liability (27.4).
+- **TableVQA (structured tables):** the **equalizer** — all 30–34, and InternVL is *not* best (LLaVA 34.4 ≥ InternVL 33.5). Encoder strength does not transfer to structured-table reasoning.
+
+**By model:**
+- **InternVL3-1B** — best on 4/5, mean **63.3**. Strong reading/document/chart/infographic understanding; weak on tables (33.5). Cost: slowest (mean 1.19 s/sample).
+- **LLaVA-OV-0.5b** — mean 52.8; mid-tier; best on tables; AnyRes multi-crop helps layout vs SmolVLM (InfoVQA 39 vs 27).
+- **SmolVLM2-500M** — mean 49.4; **fastest** (0.77); competitive on charts/OCR; weakest on layout-heavy InfoVQA.
+
+**Accuracy–latency tradeoff.** InternVL buys its ~+11–14-pt mean-accuracy lead with ~**1.5×** the per-sample latency. Both effects share a cause — **dynamic high-resolution tiling** (more image tokens ⇒ more detail *and* more compute). For a fixed edge-latency budget, the 0.5B models are ~1.5× faster at ~10–14 pts lower accuracy. (InternVL's TableVQA is its *fastest* benchmark, 0.47 s — rendered tables tile into fewer patches than infographics.)
+
+### 5.4 Key findings
+
+1. **Within sub-1B, document accuracy tracks vision-encoder capacity + input resolution:** InternViT-300M + dynamic tiling > SigLIP + AnyRes > SigLIP + aggressive compression.
+2. **InfoVQA is the most discriminating benchmark; TableVQA the least** (a shared failure mode).
+3. **Structured-table reasoning is a universal sub-1B weakness:** even the best model drops from ~81% (DocVQA) to ~33% (TableVQA) — a ~48-pt collapse.
+4. **Accuracy and latency are coupled through resolution/tiling** — the central tension for edge deployment.
+
+### 5.5 Conclusion (Part 1)
+
+Returning to the thesis — *can sub-1B VLMs be a reliable foundation for document-understanding domain adaptation?* — the evidence supports a **conditional yes**: for **text-centric reading and document QA**, `InternVL3-1B` reaches ~79–81% (OCRBench/DocVQA), a credible foundation; but for **structure- and layout-heavy reasoning** it is **not yet reliable** (TableVQA ~33%, InfoVQA ~54%). **`InternVL3-1B` is the strongest foundation**, and its concrete gaps — **tables** and **infographics** — together with its **latency premium** are the targets for the Part-2 improvement strategy.
+
+### 5.6 Limitations / threats to validity
+
+- **Subsampling:** N=1000 fixed-seed subset (not full splits) → sampling variance, especially for ANLS/relaxed-acc; reported as point estimates without confidence intervals.
+- **Single run / single seed:** no across-seed variance estimate; small differences (e.g. SmolVLM vs LLaVA on ChartQA/OCRBench) should be read as ties.
+- **Mixed 16-bit precision:** fp16 (SmolVLM, LLaVA) vs bf16 (InternVL) — comparable but not identical; documented per model (§3.1).
+- **Heuristic scoring (no LLM judge):** chatty/verbose outputs may be under-credited; partially mitigated by VLMEvalKit's answer extraction.
+- **Hardware/precision-specific latency:** single T4 (Turing); bf16 is not native on Turing, so InternVL's latency would likely improve on Ampere/Ada — latency rankings are indicative, not absolute.
+- **Partial model set:** 3 of 6 shortlisted models evaluated; FastVLM / Qwen3.5 / LFM2.5-VL pending (custom wrappers).
