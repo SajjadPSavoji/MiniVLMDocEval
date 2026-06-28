@@ -23,3 +23,6 @@ results/
 
 # Claude Code config (session-specific; not project config)
 .claude/
+
+# Local mirror of Drive results (rclone sync_results.sh)
+drive_sync/
