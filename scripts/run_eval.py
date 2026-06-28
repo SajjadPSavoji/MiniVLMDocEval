@@ -75,6 +75,11 @@ def extract_primary(res, n):
     if isinstance(res, pd.DataFrame):
         if "Overall" in res.columns and len(res):
             return "Overall(%)", float(res["Overall"].iloc[0])
+        if "average_scores" in res.columns and len(res):   # TableVQABench (per-split rows)
+            vals = pd.to_numeric(res["average_scores"], errors="coerce").dropna()
+            if len(vals):
+                m = float(vals.mean())
+                return "acc(%)", m * 100 if m <= 1 else m
         if len(res):
             row = res.iloc[0].to_dict()
             for k in ("Overall", "Final Score", "score", "acc"):
@@ -191,6 +196,41 @@ def aggregate(preds_dir):
     return df, pivot
 
 
+def rescore(preds_dir, summary_dir):
+    """Re-evaluate saved prediction files and rewrite score.json — no inference.
+    Use after a scoring fix. Preserves the recorded timing."""
+    import re
+    from vlmeval.dataset import build_dataset
+
+    pat = re.compile(r"^(.*)_n(\d+)\.xlsx$")
+    ds_cache = {}
+    for pred in sorted(Path(preds_dir).rglob("*_n*.xlsx")):
+        m = pat.match(pred.name)
+        if not m:
+            continue
+        ds_name, n = m.group(1), int(m.group(2))
+        model = pred.parent.name
+        score_file = pred.with_name(f"{pred.stem}_score.json")
+        if ds_name not in ds_cache:
+            ds_cache[ds_name] = build_dataset(ds_name)
+        try:
+            metric, value = extract_primary(ds_cache[ds_name].evaluate(str(pred)), n)
+        except Exception:
+            print(f"  rescore FAIL {model} | {ds_name}\n{traceback.format_exc()}")
+            continue
+        rec = {"model": model, "benchmark": ds_name, "n": n, "metric": metric, "value": value}
+        if score_file.exists():  # preserve timing
+            try:
+                old = json.loads(score_file.read_text())
+                rec["seconds"] = old.get("seconds")
+                rec["s_per_sample"] = old.get("s_per_sample")
+            except Exception:
+                pass
+        score_file.write_text(json.dumps(rec, indent=2, default=str))
+        print(f"  rescored {model} | {ds_name}: {metric} = {value}")
+    write_results(preds_dir, summary_dir)
+
+
 def write_results(preds_dir, summary_dir):
     out = aggregate(preds_dir)
     if out is None:
@@ -217,6 +257,8 @@ def main():
                     help="downcast fp32 models to fp16 (Lever C; auto-targets SmolVLM, leaves bf16/fp16 as-is)")
     ap.add_argument("--no-reuse", action="store_true", help="recompute pairs even if a score exists")
     ap.add_argument("--aggregate-only", action="store_true", help="skip running; just rebuild the table")
+    ap.add_argument("--rescore", action="store_true",
+                    help="re-evaluate saved prediction files (no inference) and rebuild the table")
     args = ap.parse_args()
 
     out = Path(args.out)
@@ -229,6 +271,9 @@ def main():
 
     if args.aggregate_only:
         write_results(preds_dir, summary_dir)
+        return
+    if args.rescore:
+        rescore(preds_dir, summary_dir)
         return
 
     from vlmeval.config import supported_VLM
