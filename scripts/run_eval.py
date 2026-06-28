@@ -37,6 +37,15 @@ from minivlmdoceval.config import (
 )
 
 
+NO_ANS = "<no_answer>"  # placeholder for empty/None predictions (scores as wrong; avoids NaN in xlsx)
+
+
+def clean_preds(values):
+    """Coerce predictions to non-empty strings. Empty strings round-trip to NaN
+    in xlsx, which breaks some VLMEvalKit scorers (e.g. TableVQABench .lower())."""
+    return [v if (isinstance(v, str) and v.strip()) else NO_ANS for v in values]
+
+
 def log(msg, logf=None):
     print(msg, flush=True)
     if logf is not None:
@@ -164,7 +173,7 @@ def run_pair(model, model_name, dataset_name, n, preds_dir, logf):
 
     gen_seconds = (dt.datetime.now() - t0).total_seconds()  # generation-only wall time
     sub = data.copy()
-    sub["prediction"] = preds
+    sub["prediction"] = clean_preds(preds)
     dump(sub, str(pred_file))
     res = dataset.evaluate(str(pred_file))
     metric, value = extract_primary(res, len(data))
@@ -201,6 +210,7 @@ def rescore(preds_dir, summary_dir):
     Use after a scoring fix. Preserves the recorded timing."""
     import re
     from vlmeval.dataset import build_dataset
+    from vlmeval.smp import load, dump
 
     pat = re.compile(r"^(.*)_n(\d+)\.xlsx$")
     ds_cache = {}
@@ -213,6 +223,13 @@ def rescore(preds_dir, summary_dir):
         score_file = pred.with_name(f"{pred.stem}_score.json")
         if ds_name not in ds_cache:
             ds_cache[ds_name] = build_dataset(ds_name)
+        # repair empty/NaN predictions in-place (older files written before clean_preds)
+        df = load(str(pred))
+        if "prediction" in df.columns:
+            fixed = clean_preds(list(df["prediction"]))
+            if fixed != list(df["prediction"]):
+                df["prediction"] = fixed
+                dump(df, str(pred))
         try:
             metric, value = extract_primary(ds_cache[ds_name].evaluate(str(pred)), n)
         except Exception:
