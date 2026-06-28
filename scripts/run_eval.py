@@ -25,6 +25,7 @@ import argparse
 import datetime as dt
 import gc
 import json
+import math
 import sys
 import traceback
 from pathlib import Path
@@ -41,9 +42,44 @@ NO_ANS = "<no_answer>"  # placeholder for empty/None predictions (scores as wron
 
 
 def clean_preds(values):
-    """Coerce predictions to non-empty strings. Empty strings round-trip to NaN
-    in xlsx, which breaks some VLMEvalKit scorers (e.g. TableVQABench .lower())."""
-    return [v if (isinstance(v, str) and v.strip()) else NO_ANS for v in values]
+    """Coerce predictions to non-empty STRINGS without destroying numbers.
+    xlsx round-trips a numeric prediction ("5") back to a float (5.0), and empty
+    ones to NaN — both break VLMEvalKit's TableVQA scorer (.lower() on a float).
+    Map NaN/None/empty -> placeholder; numeric floats -> their string form."""
+    out = []
+    for v in values:
+        if v is None:
+            out.append(NO_ANS)
+        elif isinstance(v, float):
+            out.append(NO_ANS if math.isnan(v) else (str(int(v)) if v.is_integer() else repr(v)))
+        elif isinstance(v, str):
+            out.append(v if v.strip() else NO_ANS)
+        else:
+            out.append(str(v))
+    return out
+
+
+def patch_tablevqa_scorers():
+    """Runtime patch (not a fork): VLMEvalKit's TableVQABench sub-scorers call
+    .lower() on raw predictions, crashing when xlsx round-trips them to float.
+    Wrap them to coerce predictions to clean strings first."""
+    try:
+        import vlmeval.dataset.utils.tablevqabench as tvb
+    except Exception:
+        return
+    if getattr(tvb, "_mvde_patched", False):
+        return
+
+    def coerce(data):
+        for inst in data:
+            inst["prediction"] = clean_preds([inst.get("prediction")])[0]
+        return data
+
+    for name in ("evaluate_tabfact", "evaluate_wtq", "evaluate_fintabnet"):
+        orig = getattr(tvb, name, None)
+        if orig is not None:
+            setattr(tvb, name, (lambda o: lambda data, *a, **k: o(coerce(data), *a, **k))(orig))
+    tvb._mvde_patched = True
 
 
 def log(msg, logf=None):
@@ -220,6 +256,7 @@ def rescore(preds_dir, summary_dir):
     import re
     from vlmeval.dataset import build_dataset
     from vlmeval.smp import load, dump
+    patch_tablevqa_scorers()
 
     pat = re.compile(r"^(.*)_n(\d+)\.xlsx$")
     ds_cache = {}
@@ -316,6 +353,7 @@ def main():
 
     from vlmeval.config import supported_VLM
     import torch
+    patch_tablevqa_scorers()
 
     for model_name in args.models:
         ts = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
