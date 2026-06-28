@@ -257,6 +257,18 @@ def rescore(preds_dir, summary_dir):
     write_results(preds_dir, summary_dir)
 
 
+def pair_complete(score_file):
+    """A pair is 'done' only if it has BOTH a score value and a runtime, so a
+    re-run backfills pairs that are missing either (e.g. timing lost in a rescore)."""
+    if not score_file.exists():
+        return False
+    try:
+        r = json.loads(score_file.read_text())
+    except Exception:
+        return False
+    return r.get("value") is not None and r.get("seconds") is not None
+
+
 def write_results(preds_dir, summary_dir):
     out = aggregate(preds_dir)
     if out is None:
@@ -322,8 +334,8 @@ def main():
 
             for dataset_name in args.data:
                 score_file = preds_dir / model_name / f"{dataset_name}_n{args.n}_score.json"
-                if score_file.exists() and not args.no_reuse:
-                    log(f"reuse {model_name} | {dataset_name} (score exists)", logf)
+                if pair_complete(score_file) and not args.no_reuse:
+                    log(f"reuse {model_name} | {dataset_name} (complete)", logf)
                     continue
                 try:
                     run_pair(model, model_name, dataset_name, args.n, preds_dir, logf)

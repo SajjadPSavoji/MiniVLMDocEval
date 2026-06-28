@@ -29,13 +29,15 @@ if ! command -v rclone >/dev/null; then
   exit 1
 fi
 
-echo "sync $REMOTE:$DRIVE_DIR -> $LOCAL_DIR/ (summary + logs)"
-rclone sync "$REMOTE:$DRIVE_DIR/summary" "$LOCAL_DIR/summary" -P
-rclone sync "$REMOTE:$DRIVE_DIR/logs"    "$LOCAL_DIR/logs"    -P
+# Deep sync of all result metadata: summary/, logs/, and predictions/ (per-pair
+# score.json + acc.csv). The heavy prediction .xlsx (base64 images) are excluded
+# unless --full is passed.
+EXCLUDE=(--exclude "*.xlsx")
+[ "${1:-}" = "--full" ] && EXCLUDE=()
 
-if [ "${1:-}" = "--full" ]; then
-  echo "sync predictions/ (heavy: pred xlsx include base64 images)"
-  rclone sync "$REMOTE:$DRIVE_DIR/predictions" "$LOCAL_DIR/predictions" -P
-fi
+echo "sync $REMOTE:$DRIVE_DIR -> $LOCAL_DIR/ (summary + logs + predictions metadata${1:+ $1})"
+rclone sync "$REMOTE:$DRIVE_DIR/summary"      "$LOCAL_DIR/summary"      -P
+rclone sync "$REMOTE:$DRIVE_DIR/logs"         "$LOCAL_DIR/logs"         -P
+rclone sync "$REMOTE:$DRIVE_DIR/predictions"  "$LOCAL_DIR/predictions"  "${EXCLUDE[@]}" -P
 
 echo "done -> $LOCAL_DIR/"
