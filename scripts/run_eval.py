@@ -84,10 +84,19 @@ def extract_primary(res, n):
     if isinstance(res, pd.DataFrame):
         if "Overall" in res.columns and len(res):
             return "Overall(%)", float(res["Overall"].iloc[0])
-        if "average_scores" in res.columns and len(res):   # TableVQABench (per-split rows)
-            vals = pd.to_numeric(res["average_scores"], errors="coerce").dropna()
-            if len(vals):
-                m = float(vals.mean())
+        if "average_scores" in res.columns and len(res):   # TableVQABench: cells are lists like [acc]
+            per_split = []
+            for cell in res["average_scores"]:
+                if isinstance(cell, (list, tuple)):
+                    nums = [v for v in cell if isinstance(v, (int, float))]
+                elif isinstance(cell, (int, float)):
+                    nums = [cell]
+                else:
+                    nums = []
+                if nums:
+                    per_split.append(sum(nums) / len(nums))
+            if per_split:
+                m = sum(per_split) / len(per_split)  # mean across the table sub-domains
                 return "acc(%)", m * 100 if m <= 1 else m
         if len(res):
             row = res.iloc[0].to_dict()
