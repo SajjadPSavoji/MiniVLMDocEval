@@ -1,0 +1,683 @@
+\documentclass{article}
+
+\PassOptionsToPackage{numbers, compress}{natbib}
+\usepackage[preprint]{neurips_2026}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{hyperref}
+\usepackage{url}
+\usepackage{booktabs}
+\usepackage{amsfonts}
+\usepackage{amsmath}
+\usepackage{nicefrac}
+\usepackage{microtype}
+\usepackage{xcolor}
+\usepackage{graphicx}
+\usepackage{multirow}
+\graphicspath{{figures/}}
+
+\newcommand{\best}[1]{\textbf{#1}}
+\newcommand{\todo}[1]{\textcolor{red}{[#1]}}
+
+\title{Sub-1B VLM for Document Understanding:\\
+A Systematic Evaluation and a Targeted Improvement}
+
+\author{%
+  Sajjad Pakdamansavoji \\
+  \texttt{sj.pakdaman.edu@gmail.com} \\
+  \url{https://github.com/SajjadPSavoji/MiniVLMDocEval}
+}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Document understanding is a natural target for on-device vision-language models
+(VLMs), yet models with fewer than a billion parameters remain largely
+uncharacterized on it. We present a systematic and reproducible evaluation of
+six open-source VLMs, ranging from 0.45 to 0.9B parameters, across five document
+benchmarks arranged as a diagnostic ladder that runs from recognition through
+extraction, numeric reasoning, and layout reasoning to tabular reasoning. Under
+matched decoding, precision, and sampling, the strongest model, Qwen3.5-0.8B,
+reaches a mean score of 70.3 out of 100 and leads on three of the five
+benchmarks, yet no model clears 50.1 on visual table question answering. Two
+results stand out. Within this size band, architecture matters more than
+parameter count: the smallest model, at 0.45B, outranks both 0.9B models. And
+the design choice that drives performance is the image-resolution strategy
+rather than scale. We then ask where the best model falls short. Breaking the
+table benchmark into its sub-domains shows that the weakness lies in
+Wikipedia-style visual lookup, at 27.8 and 33.1, rather than in financial or
+numeric tables, at 84.0, which corrects a common assumption. Guided by this
+evidence, we design a parameter-efficient adaptation aimed at the measured
+weakness, with strict separation between training and evaluation data and a
+success criterion fixed in advance. We release an extensible evaluation
+pipeline, a public training dataset, and all scripts. Our first adaptation does
+not meet that criterion: it induces catastrophic forgetting, which we trace to a
+mismatch between the answer style of the training data and that of the
+benchmarks, and we report the outcome in full (Section~\ref{sec:improve-results}).
+The criterion rejecting the degraded checkpoint is the protocol behaving as
+intended, and the diagnosis points to a concrete corrected recipe.
+\end{abstract}
+
+\section{Introduction}
+\label{sec:intro}
+
+Most multimodal evaluation effort targets models of 3B parameters and above.
+This leaves open a practical question about the smaller models that actually fit
+on-device and cost-sensitive deployments: can a VLM below 1B parameters serve as
+a reliable foundation for document understanding and later domain adaptation?
+Document images are dense and high-resolution, so reading them stresses the
+vision encoder and the resolution-handling strategy far more than natural-image
+captioning does. The central question of this work is therefore:
+
+\begin{quote}
+\emph{Can sub-billion-parameter VLMs be a reliable foundation for
+document-understanding domain adaptation, and where do they break?}
+\end{quote}
+
+We answer it in two parts. Part~1 is a controlled comparison of six models on a
+five-benchmark suite built as a diagnostic ladder rather than a leaderboard.
+Part~2 turns the resulting failure profile of the best model into a concrete,
+literature-grounded improvement strategy whose success criterion is fixed before
+any training. Our contributions are the following.
+
+\begin{itemize}
+\item \textbf{An evaluation pipeline and a controlled comparison protocol.} A
+single config-driven entry point scores any registered model. We add custom
+integrations for three models the harness does not support out of the box
+(FastVLM-0.5B, Qwen3.5-0.8B, and LFM2.5-VL-450M), and we hold the comparison
+fair and fast by aligning every model to 16-bit precision, so none benefits from
+a wider numeric format, and by capping generation length in a way that leaves
+accuracy unchanged while cutting decoding cost (Section~\ref{sec:setup}).
+\item \textbf{A reproducible six-model evaluation} across the five document
+benchmarks under this protocol, with a per-skill analysis and a joint view of
+accuracy and efficiency (Sections~\ref{sec:bench} to~\ref{sec:results}).
+\item \textbf{Two robust findings:} architecture beats parameter count between
+0.45 and 0.9B, and accuracy tracks the resolution and tokenization strategy more
+closely than it tracks scale (Section~\ref{sec:results}).
+\item \textbf{An evidence-based gap analysis} that decomposes the table
+benchmark into its sub-domains and shows the deficit is visual row-and-column
+lookup rather than numeric reasoning, contrary to the default assumption in the
+table-QA literature (Section~\ref{sec:gap}).
+\item \textbf{A targeted, contamination-controlled adaptation} of the best
+model at the measured weakness, evaluated against a pre-registered
+no-regression criterion, together with a publicly released training dataset
+(Section~\ref{sec:improve}).
+\end{itemize}
+
+\section{Related Work}
+\label{sec:related}
+
+\paragraph{Small and edge VLMs.}
+Efficiency-focused models handle the vision pathway in noticeably different ways
+to fit tight compute budgets. SmolVLM couples a SigLIP
+encoder~\citep{zhai2023siglip} with a small language backbone and aggressive
+visual-token compression~\citep{marafioti2025smolvlm}. LLaVA-OneVision uses
+AnyRes multi-crop tiling~\citep{li2024llavaonevision}. The Qwen-VL line adopts
+native dynamic-resolution processing~\citep{wang2024qwen2vl} in the spirit of
+NaViT~\citep{dehghani2023navit}, and InternVL pairs a stronger vision encoder
+with dynamic high-resolution tiling~\citep{chen2024internvl}. Each design answers
+the two questions that govern document performance differently, namely how to
+encode a high-resolution page and how much language capacity backs the reading,
+which is exactly why we assemble a diversified shortlist rather than testing one
+recipe repeatedly.
+
+\paragraph{Document-understanding benchmarks.}
+We build on established public benchmarks: DocVQA for dense scanned
+documents~\citep{mathew2021docvqa}, InfographicVQA for high-resolution
+layout reasoning~\citep{mathew2022infographicvqa}, ChartQA for chart-based
+numeric reasoning~\citep{masry2022chartqa}, OCRBench for raw text
+recognition~\citep{liu2024ocrbench}, and TableVQA-Bench for visual table
+question answering~\citep{kim2024tablevqa}. We evaluate through
+VLMEvalKit~\citep{duan2024vlmevalkit}, a generation-based harness with
+per-benchmark scorers.
+
+\paragraph{Parameter-efficient adaptation and table understanding.}
+LoRA~\citep{hu2022lora} and its quantized variant
+QLoRA~\citep{dettmers2023qlora} allow low-cost specialization while limiting
+catastrophic forgetting. For tables in particular, Table-LLaVA and the MMTab
+corpus show that table-structure-aware supervision is what unlocks visual
+tabular reasoning~\citep{zheng2024mmtab}. Part~2 builds on this line of work, but
+aims at a sub-skill we have actually measured rather than at tables in the
+aggregate.
+
+\section{Models}
+\label{sec:models}
+
+\paragraph{Selection criteria.}
+We require each candidate to meet four conditions: a verified total parameter
+count below 1B including the vision encoder; a generalist question-answering
+model, which excludes OCR and parsing specialists that emit transcriptions
+rather than answers; support for document-scale input resolution; and a real,
+loadable checkpoint. Among the popular generalist VLMs that satisfy these
+conditions, we pick one strong representative per architecture and lab, so the
+comparison isolates design differences instead of re-testing one recipe. The
+resulting six models (Table~\ref{tab:models}) span six labs, five encoder
+paradigms, and four language backbones. Most important for our purposes, they
+also span distinct resolution strategies, the axis that matters most for dense
+pages.
+
+\begin{table}[t]
+\caption{The six evaluated sub-1B VLMs. Parameter counts include the vision
+encoder. Resolution strategy is the primary design axis under study.}
+\label{tab:models}
+\centering
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{@{}llcll@{}}
+\toprule
+Model & Lab & Params & Encoder + backbone & Resolution strategy \\
+\midrule
+Qwen3.5-0.8B~\citep{qwen35card}     & Alibaba   & 0.8B  & Qwen-native + gated-delta/MoE   & Native dynamic (NaViT-style) \\
+InternVL3-1B~\citep{internvl3card}  & OpenGVLab & 0.9B  & InternViT-300M + Qwen2.5-0.5B   & Dynamic high-res tiling (448$^2$) \\
+LFM2.5-VL-450M~\citep{lfm2vlcard}   & Liquid AI & 0.45B & SigLIP2-86M + LFM2-350M         & Native $\le$512$^2$ + tunable tiling \\
+LLaVA-OV-0.5B~\citep{li2024llavaonevision} & LMMs-Lab & 0.9B & SigLIP + Qwen2-0.5B      & AnyRes multi-crop \\
+SmolVLM2-500M~\citep{smolvlm2card}  & Hugging Face & 0.5B & SigLIP + SmolLM2-360M        & Split + pixel-shuffle compression \\
+FastVLM-0.5B~\citep{fastvlmcard}    & Apple     & 0.8B  & FastViTHD + Qwen2-0.5B          & High-res, few-token compression \\
+\bottomrule
+\end{tabular}}
+\end{table}
+
+\section{Benchmark Suite and Metrics}
+\label{sec:bench}
+
+\paragraph{A diagnostic ladder.}
+We do not treat the five benchmarks as interchangeable accuracy numbers. Instead
+we order them so that each asks for more than the last
+(Table~\ref{tab:benchmarks}): recognition with OCRBench, then single-hop
+extraction with DocVQA, numeric reasoning with ChartQA, multi-hop layout
+reasoning with InfoVQA, and finally structured tabular reasoning with TableVQA.
+OCRBench anchors the ladder. When a model fails a task higher up, its recognition
+score tells us whether the problem is reading or reasoning, and that distinction
+is what lets the Part-2 gap analysis rest on evidence rather than speculation.
+All five benchmarks are scored locally, which keeps the pipeline reproducible.
+
+\begin{table}[t]
+\caption{The five document benchmarks, ordered as a capability ladder. Metrics
+are native to each benchmark. ANLS is average normalized Levenshtein
+similarity; relaxed accuracy admits $\pm5\%$ numeric error.}
+\label{tab:benchmarks}
+\centering
+\small
+\begin{tabular}{@{}lllc@{}}
+\toprule
+Benchmark & Image type & Core sub-skill & Metric \\
+\midrule
+OCRBench           & Mixed scenes/scans/handwriting (5 tasks) & Raw text recognition          & Accuracy \\
+DocVQA (val)       & Scanned industry documents               & Read + locate (single-hop)    & ANLS \\
+ChartQA (test)     & Real charts (bar/line/pie)               & Data extraction + arithmetic  & Relaxed acc. \\
+InfoVQA (val)      & High-res infographics                    & Text + graphics + layout      & ANLS \\
+TableVQA-Bench     & Rendered table images (4 sub-domains)    & Tabular lookup + aggregation  & Accuracy \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{Beyond-accuracy evaluation.}
+The suite is deliberately diverse in its metrics. It uses three different notions
+of correctness (accuracy, ANLS, and relaxed accuracy), so tolerance to exact
+string matching is built into the comparison from the start. We also report
+per-sample latency, a deployment-relevant axis (Section~\ref{sec:results}), which
+lets us describe each model by accuracy and efficiency together rather than by a
+single ranking. The task brief names two further axes beyond accuracy,
+calibration and robustness to domain terminology. We have not yet measured them.
+Instead we give a precise protocol for both in Section~\ref{sec:beyond} and treat
+them as extensions to run once the baseline results warrant it, not as
+speculative additions.
+
+\section{Experimental Setup and Reproducibility}
+\label{sec:setup}
+
+\paragraph{Inference protocol.}
+All models use greedy decoding ($\texttt{do\_sample}=\text{False}$). We cap
+generation at \texttt{max\_new\_tokens}=128 for two reasons. It keeps the
+comparison fair, since no model is penalized or rewarded for a runaway
+transcript, and it keeps the run fast, because these small models otherwise
+spend their decoding budget on verbose restatements. An ablation
+(Section~\ref{sec:efficiency}) confirms the cap leaves accuracy unchanged on
+these short-answer benchmarks. Each benchmark is evaluated on a fixed, seed-42
+stratified subset of $N{=}1000$ questions (OCRBench has exactly 1000 and is run
+in full), drawn deterministically so that the numbers reproduce and the
+per-sub-domain composition of TableVQA is preserved. To keep numeric precision
+from confounding the comparison, we align every model to 16-bit, the format used
+in realistic edge deployment, so that none gains an advantage from a wider
+representation. We use fp16 for SmolVLM2, LLaVA-OV, and FastVLM, and bf16 for
+InternVL3, Qwen3.5, and LFM2.5-VL, and we document the per-model choice because
+forcing a bf16-native model into the narrower range of fp16 can destabilize it.
+
+\paragraph{Software stack and pipeline.}
+We use VLMEvalKit~\citep{duan2024vlmevalkit} as a pinned dependency that we never
+fork. It handles dataset download, prompt construction, generation, and
+per-benchmark scoring, and adding a model to it requires implementing a single
+\texttt{generate\_inner} method. Around it we build a thin, config-driven runner
+in which a registry maps a model name to a loader, so that one command,
+\texttt{run\_eval.py -{}-models <name>}, scores any registered model on any
+subset with per-pair caching and resumption. One practical contribution is
+extending the harness to three models it does not cover out of the box: we write
+device-agnostic wrappers for FastVLM-0.5B and Qwen3.5-0.8B, both of which need
+trust-remote-code-style loading and bespoke image-token handling, and add a
+registry entry for LFM2.5-VL-450M, so that all six models run under one identical
+protocol. The engine commit, seeds, and decoding parameters are pinned, and
+results persist to a single output tree that the aggregation and figure scripts
+consume.
+
+\paragraph{Hardware.}
+Evaluation ran on free or low-cost Colab GPUs (NVIDIA T4 and L4), with the Part-2
+study on an A100. Because decoding is deterministic, the accuracy numbers do not
+depend on the hardware; latency does, so we treat it as indicative
+(Section~\ref{sec:limitations}).
+
+\subsection{Efficiency ablations}
+\label{sec:efficiency}
+Two protocol choices trade compute for throughput, and we justify each with a
+controlled ablation that reports its effect on accuracy, not only its speedup
+(Table~\ref{tab:ablation}; SmolVLM2-500M, $N{=}100$). \textbf{Precision.}
+Downcasting the one fp32 model to fp16 gives a $1.8\times$ speedup with no
+instability. The $+5.0$-point score change at $N{=}100$ sits within run-to-run
+precision variation at this sample size and shrinks at $N{=}1000$, so we read the
+change as accuracy-neutral and simply faster. \textbf{Generation cap.} Lowering
+\texttt{max\_new\_tokens} from 2048 to 128 leaves the DocVQA and InfoVQA scores
+bit-identical and the wall-time unchanged, because these short-answer models emit
+end-of-sequence well before the cap. The cap therefore truncates no correct
+answer while removing the tail-latency risk of runaway generation. Both ablations
+are reproduced by \texttt{efficiency\_ablation.py}.
+
+\begin{table}[t]
+\caption{Inference-efficiency ablations (SmolVLM2-500M, $N{=}100$). Each lever
+is evaluated for both speed and accuracy. The fp16 score change is within
+precision/sampling noise at this $N$; the generation cap is exactly neutral.}
+\label{tab:ablation}
+\centering
+\small
+\begin{tabular}{@{}lllcc@{}}
+\toprule
+Lever & Benchmark & Setting & Score & Gen.\ time (s) \\
+\midrule
+\multirow{2}{*}{Precision} & \multirow{2}{*}{OCRBench} & fp32 & 57.0 & 209 \\
+                           &                           & fp16 & 62.0 & \best{116} \\
+\midrule
+\multirow{4}{*}{Gen.\ cap} & \multirow{2}{*}{DocVQA}  & 2048 tok & 76.6 & \multirow{4}{*}{$\approx$138} \\
+                           &                          & 128 tok  & 76.6 & \\
+                           & \multirow{2}{*}{InfoVQA} & 2048 tok & 32.9 & \\
+                           &                          & 128 tok  & 32.9 & \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Results and Analysis}
+\label{sec:results}
+
+Table~\ref{tab:main} reports accuracy across the suite.
+Figure~\ref{fig:benchmarks} shows the per-benchmark profile, and
+Figure~\ref{fig:pareto} places the models on the accuracy and efficiency
+frontier.
+
+\begin{table}[t]
+\caption{Accuracy (0 to 100; higher is better) on the five document benchmarks,
+$N{=}1000$ seed-42 subsets. Sorted by mean. \best{Bold} = best per column.}
+\label{tab:main}
+\centering
+\small
+\begin{tabular}{@{}llcccccc@{}}
+\toprule
+Model & Params & ChartQA & DocVQA & InfoVQA & OCRBench & TableVQA & \best{Mean} \\
+\midrule
+Qwen3.5-0.8B    & 0.8B  & 70.8 & \best{89.3} & \best{62.3} & 79.2 & \best{50.1} & \best{70.3} \\
+InternVL3-1B    & 0.9B  & 68.8 & 80.8 & 54.2 & \best{79.4} & 33.5 & 63.3 \\
+LFM2.5-VL-450M  & 0.45B & \best{73.1} & 77.2 & 41.3 & 67.8 & 40.2 & 59.9 \\
+LLaVA-OV-0.5B   & 0.9B  & 60.0 & 70.4 & 39.0 & 60.2 & 34.4 & 52.8 \\
+SmolVLM2-500M   & 0.5B  & 60.4 & 67.8 & 27.4 & 61.0 & 30.3 & 49.4 \\
+FastVLM-0.5B    & 0.8B  & 44.3 & 63.6 & 32.5 & 26.2 & 17.5 & 36.8 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[t]
+\centering
+\begin{minipage}[t]{0.49\textwidth}
+\centering
+\includegraphics[width=\linewidth]{fig_benchmarks.pdf}
+\caption{Per-benchmark accuracy across the diagnostic ladder. The spread widens
+from recognition to layout/table reasoning.}
+\label{fig:benchmarks}
+\end{minipage}\hfill
+\begin{minipage}[t]{0.49\textwidth}
+\centering
+\includegraphics[width=\linewidth]{fig_pareto.pdf}
+\caption{Accuracy against efficiency. LFM2.5-VL and Qwen3.5 own the Pareto
+front, and FastVLM is dominated. Latency is indicative (mixed T4/L4).}
+\label{fig:pareto}
+\end{minipage}
+\end{figure}
+
+Table~\ref{tab:latency} reports the per-sample latency underlying the efficiency
+axis of Figure~\ref{fig:pareto}.
+
+\begin{table}[t]
+\caption{Mean per-sample latency (seconds; lower is better). Indicative only,
+since the T4 and L4 hardware differs across models, so only the ordering is
+robust (Section~\ref{sec:limitations}).}
+\label{tab:latency}
+\centering
+\small
+\begin{tabular}{@{}lcccccc@{}}
+\toprule
+Model & ChartQA & DocVQA & InfoVQA & OCRBench & TableVQA & Mean \\
+\midrule
+LFM2.5-VL-450M & 0.14 & 0.27 & 0.23 & 0.32 & 0.27 & \best{0.24} \\
+SmolVLM2-500M  & 0.72 & 0.96 & 0.70 & 0.83 & 0.66 & 0.77 \\
+LLaVA-OV-0.5B  & 0.46 & 1.35 & 0.83 & 0.95 & 0.57 & 0.83 \\
+InternVL3-1B   & 0.69 & 1.47 & 1.84 & 1.46 & 0.47 & 1.19 \\
+Qwen3.5-0.8B   & 0.57 & 1.44 & 1.49 & 2.22 & 0.67 & 1.28 \\
+FastVLM-0.5B   & 3.84 & 3.92 & 3.92 & 3.68 & 3.93 & 3.86 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{Per-benchmark analysis.}
+On \textbf{OCRBench}, Qwen3.5 (79.2) and InternVL3 (79.4) lead, the other capable
+models cluster between 60 and 68, and FastVLM collapses to 26.2 despite its
+high-resolution encoder. Its aggressive few-token compression appears to trade
+away exact-reading fidelity. \textbf{DocVQA} shows the tightest spread among the
+capable models, because ANLS tolerates minor reading slips; FastVLM even recovers
+to 63.6 here, which tells us its OCRBench failure is about exact-match reading
+rather than comprehension. \textbf{ChartQA} is the least encoder-bound task, and
+the smallest model wins it (LFM2.5-VL, 73.1). \textbf{InfoVQA} is the most
+discriminating task, spanning 27.4 to 62.3, where native dynamic resolution
+(Qwen3.5, InternVL3) clearly beats aggressive token compression (SmolVLM2). On
+\textbf{TableVQA} every model scores low, and Qwen3.5's 50.1 is the ceiling.
+
+\paragraph{Key findings.}
+\textbf{A clear best foundation.} Qwen3.5-0.8B reaches the highest mean (70.3) and
+wins three of five tasks. Its native dynamic-resolution encoding, paired with the
+largest backbone in the set, generalizes across reading, layout, and tables.
+\textbf{Architecture beats parameter count.} The smallest model, LFM2.5-VL-450M at
+0.45B, outranks both 0.9B models and wins ChartQA, so within this band the
+resolution strategy and backbone quality matter more than scale.
+\textbf{Resolution strategy orders the field.} Native dynamic resolution and
+tunable tiling come first, AnyRes multi-crop next, and aggressive token
+compression last; FastVLM's few-token compression is an outlier liability for
+exact reading. \textbf{Efficiency follows architecture, not size.} The image-token
+budget dominates per-sample cost, so the 0.45B LFM2.5-VL runs about five times
+faster than the 0.8B FastVLM, and the frontier of accuracy against efficiency
+belongs to LFM2.5-VL, the cheapest, and Qwen3.5, the most accurate.
+\textbf{Tables are the frontier} for every model, which sets up Part~2.
+
+\section{Knowledge-Gap Analysis}
+\label{sec:gap}
+
+The best model, Qwen3.5-0.8B, reads well (OCRBench 79.2, DocVQA 89.3) and handles
+layout well (InfoVQA 62.3), but it reaches only 50.1 on visual table question
+answering. That is its weakest task, 12 points below its next-lowest score and 39
+points below its DocVQA. Tables are therefore the decisive bottleneck. To
+understand why, we break TableVQA-Bench into its four native sub-domains
+(Table~\ref{tab:subdomains}, Figure~\ref{fig:subdomains}).
+
+\begin{table}[t]
+\caption{TableVQA-Bench sub-domain accuracy for Qwen3.5-0.8B. The deficit is
+concentrated in Wikipedia-style visual lookup (VWTQ/VWTQ-Syn), the largest
+slice of the benchmark; financial tables are already strong.}
+\label{tab:subdomains}
+\centering
+\small
+\begin{tabular}{@{}llc@{}}
+\toprule
+Sub-domain & What it tests & Accuracy \\
+\midrule
+VWTQ        & Lookup over real Wikipedia-style tables (largest slice) & \best{27.8} \\
+VWTQ-Syn    & Lookup over synthetic Wikipedia-style tables            & \best{33.1} \\
+VTabFact    & True/false fact verification                           & 55.5 \\
+FinTabNetQA & Financial tables (numbers/units)                       & 84.0 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.72\linewidth]{fig_subdomains.pdf}
+\caption{TableVQA sub-domain accuracy for all six models. Lookup
+(VWTQ/VWTQ-Syn) is the universal floor; financial tables (FinTabNetQA) are the
+universal ceiling. The aggregate ``table'' deficit is a \emph{visual lookup}
+deficit, not a numeric-reasoning one.}
+\label{fig:subdomains}
+\end{figure}
+
+The decomposition is decisive. Qwen3.5 is already strong on financial,
+number-and-unit tables (84.0) and reasonably strong on fact verification (55.5),
+while its failures concentrate on plain lookup over dense, general-purpose tables
+(27.8 and 33.1). Since VWTQ makes up roughly half of the benchmark, this sub-skill
+also carries the most weight in the aggregate score. The result runs against the
+usual assumption in the table-QA literature, which treats financial and numeric
+tables as the hard case, and it sharpens the diagnosis: the model can read the
+text in a table but struggles to bind a question to the correct row and column
+when the layout is busy. We therefore target visual table lookup rather than
+numeric reasoning.
+
+\section{Improvement Strategy and Proof of Concept}
+\label{sec:improve}
+
+\paragraph{Method.}
+Guided by the diagnosis, we apply a light parameter-efficient adaptation to
+Qwen3.5-0.8B that targets visual table lookup while protecting the four
+capabilities the model is already good at. We use bf16 LoRA~\citep{hu2022lora},
+which is known to learn less and forget less and is therefore the safe choice for
+a strong baseline we must not regress, and we avoid 4-bit
+quantization~\citep{dettmers2023qlora} because the model's gated-delta state
+updates are sensitive to it and the 0.8B model fits in bf16 anyway. We freeze the
+vision encoder and place the adapters on the language pathway, including the
+gated-delta projections that make up most of the model's sequence-mixer layers,
+so that adaptation does not disturb the visual features the other benchmarks rely
+on.
+
+\paragraph{Data, with strict isolation.}
+The training data is weighted toward Wikipedia-style visual table lookup, the
+sub-skill we measured as weakest, and mixed with about 25\% replay of the model's
+already-strong document data to guard against catastrophic forgetting, a known
+risk when a strong model is specialized on a narrow task. Two safeguards keep
+training and evaluation cleanly separated. Replay is drawn only from rows outside
+the fixed seed-42 evaluation subsets, and every candidate training question is
+checked against the full TableVQA-Bench question set and dropped on a match.
+TableVQA-Bench is never itself a training source. The table-QA prompts reuse the
+harness's own template, so the model trains under the same prompt it is scored
+under. We release the resulting mixture as a public dataset with a manifest
+recording these safeguards.\footnote{Dataset:
+\url{https://huggingface.co/datasets/savoji/minivlm-tablevqa-sft}; adapter:
+\url{https://huggingface.co/savoji/qwen3.5-0.8b-tablevqa-lora}.} This design follows the
+evidence that table-structure-aware supervision is the effective lever for
+visual tabular reasoning~\citep{zheng2024mmtab}.
+
+\paragraph{Pre-registered evaluation.}
+We fix the success criterion before training. The adaptation is accepted only if
+the TableVQA mean rises by at least 3 points, with the gain concentrated in the
+targeted VWTQ sub-domains, and no protected benchmark (OCRBench, DocVQA, ChartQA,
+InfoVQA) drops by more than 1.5 points, all measured on the identical seed-42
+subsets. Because TableVQA-Bench is small, about 1500 items, we always report the
+sub-domain breakdown rather than the mean alone.
+
+\paragraph{Expected outcomes.}
+We expect a modest gain focused on VWTQ and VWTQ-Syn, with the protected
+benchmarks staying within tolerance. We do not expect the gap to close fully,
+because at 0.8B the vision encoder limits how much of a dense table is legible. A
+measured lift on the highest-leverage sub-skill without regression would show
+that the localized gap is at least partly addressable by targeted PEFT, which is
+the practical claim of Part~2.
+
+\subsection{Improvement results: a rejected adaptation}
+\label{sec:improve-results}
+The targeted adaptation does not pass the pre-registered criterion
+(Table~\ref{tab:improve}). Instead of the modest gain we anticipated on visual
+lookup, TableVQA drops from 50.1 to 19.6, and two benchmarks the model had
+handled well collapse (DocVQA from 89.3 to 50.8, InfoVQA from 62.3 to 27.8). The
+criterion therefore rejects this checkpoint, which is exactly what a
+no-regression protocol is meant to do: it keeps us from shipping a degraded
+model.
+
+\begin{table}[t]
+\caption{The targeted adaptation \emph{fails} the pre-registered gate, on the
+identical seed-42 subsets: the target task itself regresses and the strong
+DocVQA/InfoVQA capabilities collapse.}
+\label{tab:improve}
+\centering
+\small
+\begin{tabular}{@{}lccc@{}}
+\toprule
+Metric & Baseline & After adapt. & $\Delta$ \\
+\midrule
+TableVQA (mean)      & 50.1 & 19.6 & $-30.5$ \\
+\quad VWTQ            & 27.8 & 0.6  & $-27.2$ \\
+\quad VWTQ-Syn        & 33.1 & 0.0  & $-33.1$ \\
+\quad VTabFact        & 55.5 & 62.4 & $+6.9$ \\
+\quad FinTabNetQA     & 84.0 & 15.4 & $-68.6$ \\
+\midrule
+OCRBench  & 79.2 & 77.4 & $-1.8$ \\
+DocVQA    & 89.3 & 50.8 & $-38.4$ \\
+ChartQA   & 70.8 & 75.3 & $+4.5$ \\
+InfoVQA   & 62.3 & 27.8 & $-34.5$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{Diagnosis.}
+The sub-domain breakdown pinpoints the failure. VTabFact, whose output space is
+just True or False, is the only sub-domain that does not collapse, and it even
+rises to 62.4, while every sub-domain that has to emit a specific cell value
+falls to near zero (VWTQ from 27.8 to 0.6, VWTQ-Syn from 33.1 to 0.0, FinTabNetQA
+from 84.0 to 15.4). Together with the collapse of the span-based DocVQA and
+InfoVQA scores, this pattern points to a shift in the model's output distribution
+rather than a loss of perception. The proximate cause is a mismatch in answer
+style between training and evaluation: the synthetic table-QA source we trained on
+supplies verbose, full-sentence answers, whereas every target benchmark is scored
+on short cell values or spans. Fine-tuning therefore taught the model to be
+verbose, which exact-match and ANLS scoring penalize across the board, and the
+25\% replay fraction was too small to hold the line.
+
+\paragraph{A corrected recipe.}
+The diagnosis points to a concrete and falsifiable correction, which we leave to
+future work. First, train on short-answer table lookup whose answer length and
+style match the evaluation, either by filtering the source to short answers or by
+using WikiTableQuestions-derived short answers under the same overlap guard.
+Second, raise the replay fraction to 40 or 50\% to protect DocVQA and InfoVQA.
+Third, lower the learning rate, to $5\times10^{-5}$, and add early stopping on a
+held-out development gate. Fourth, add a data-quality check before training that
+compares the answer-length distribution of the training mixture with that of the
+benchmarks; that single check would have caught this failure before any GPU time
+was spent. The VWTQ gap identified in Section~\ref{sec:gap} still stands and
+remains the right target, but closing it calls for answer-style-matched
+supervision, not simply more table data.
+
+\section{Beyond-Accuracy Evaluation: Two Future Protocol Extensions}
+\label{sec:beyond}
+
+Our protocol already covers two axes beyond raw accuracy: diversity of
+correctness metrics (accuracy, ANLS, and relaxed accuracy) and the trade-off
+between accuracy and efficiency. We designed two further extensions, confidence
+calibration and robustness to input degradation and domain terminology, but we
+leave their execution to future work given the time and compute budget of this
+study. We specify both precisely below, so that each slots into the same
+reproducible harness without any redesign, and we present them as concrete next
+steps rather than speculative additions.
+
+\paragraph{Calibration.}
+We will elicit confidence in two complementary ways: verbalized confidence, where
+the model appends an estimate from 0 to 100\% under a prompt applied uniformly to
+all six models, and, where the wrapper exposes them, sequence log-probabilities.
+Binning confidence against empirical correctness gives the Expected Calibration
+Error~\citep{guo2017calibration}. Calibration is most informative when a model is
+accurate but overconfident, or when it separates models that are otherwise close,
+and our results suggest both conditions hold for the middle of the field.
+
+\paragraph{Robustness to domain terminology and degradation.}
+We will build paired perturbations and report the accuracy drop against clean
+inputs. The first is image degradation, through blur, JPEG compression, and
+downscaling, which probes the resolution-strategy differences identified in
+Section~\ref{sec:results}. The second is paraphrase of the domain terminology in
+the questions, which tests sensitivity to surface wording. Reporting the accuracy
+drop on matched slices separates brittleness from baseline capability. We specify
+these probes here so they can be run under the same reproducible harness.
+
+\section{Limitations and Threats to Validity}
+\label{sec:limitations}
+
+\textbf{Subsampling and single seed.} We evaluate on $N{=}1000$ fixed-seed
+subsets rather than full splits, and we report point estimates without confidence
+intervals, so small differences, such as Qwen3.5 at 79.2 against InternVL3 at
+79.4 on OCRBench, should be read as ties. \textbf{Mixed precision.} Every model
+runs at 16-bit, but fp16 and bf16 are not bit-identical, so precision is held
+constant only up to that. \textbf{Heuristic scoring.} We use the harness's
+string-based scorers without an LLM judge, which can under-credit verbose
+answers. \textbf{Latency hardware.} The built-in and custom models ran in
+different Colab sessions on T4 and L4 hardware; accuracy is unaffected, but
+cross-model latency is indicative rather than absolute, and only the ordering is
+robust. \textbf{Calibration and robustness} are specified but not yet measured
+(Section~\ref{sec:beyond}). \textbf{Capacity ceiling.} At 0.8B the encoder limits
+legibility on dense tables, which caps the gain any Part-2 method can achieve.
+
+\section{Conclusion}
+\label{sec:conclusion}
+
+We can now answer the question we set out with. Between 0.45 and 0.9B
+parameters, VLMs are a conditionally reliable foundation for document
+understanding. For text-centric reading and document QA the best model,
+Qwen3.5-0.8B, is already credible (OCRBench 79, DocVQA 89), but for structured
+tabular reasoning it is not yet reliable (TableVQA 50.1). Two design lessons
+generalize beyond our particular models: architecture beats parameter count in
+this band, and the resolution and tokenization strategy is the main driver of
+both accuracy and efficiency. Decomposing the best model's weakness shows that
+its table gap is specifically one of visual lookup, not numeric reasoning, and
+this correction makes the improvement target precise and the adaptation testable
+against a criterion fixed in advance. Our first adaptation does not meet that
+criterion. It induces catastrophic forgetting, which we trace to a mismatch in
+answer style between training and evaluation, so the gap remains open. The
+no-regression protocol nonetheless did exactly its job: it rejected a degraded
+model and turned a negative result into a precise, falsifiable recipe for the
+next attempt rather than a misleading headline number. We release the pipeline,
+dataset, and scripts to support reproduction and extension.
+
+\paragraph{Reproducibility and released artifacts.}
+Code, configuration, seeds, the pinned evaluation engine, the dataset manifest,
+and all scripts (evaluation, sub-domain reporting, data construction,
+adaptation, the no-regression gate, and figure generation) are public at the
+repository linked above. The training mixture is released as a dataset,
+\url{https://huggingface.co/datasets/savoji/minivlm-tablevqa-sft}, and the
+(gate-failing) Part-2 adapter as a model,
+\url{https://huggingface.co/savoji/qwen3.5-0.8b-tablevqa-lora}, published for
+transparency of the negative result rather than as a recommended checkpoint. The
+full result tree, meaning the per-benchmark predictions, per-pair scores, logs,
+and summary tables for every run, is publicly mirrored on Google Drive:
+\url{https://drive.google.com/drive/folders/1xDkoQLUG3d-ymxNvvLpKryRsGe8xpLvc}.
+
+\bibliographystyle{plainnat}
+\bibliography{references}
+
+\appendix
+\section{Appendix}
+
+\subsection{Adaptation hyperparameters}
+LoRA rank $r{=}16$, $\alpha{=}32$, dropout $0$; learning rate $1\times10^{-4}$
+with cosine schedule and 3\% warmup; one epoch; effective batch size 16 via
+gradient accumulation; \texttt{max\_seq\_length}=2048; gradient checkpointing;
+vision encoder frozen; adapters on attention, MLP, and gated-delta projections;
+bf16 (no 4-bit). The training mixture is $\sim$70\% Wikipedia-style table
+lookup and $\sim$25\% held-out document replay, with the overlap guards of
+Section~\ref{sec:improve}.
+
+\subsection{Qualitative examples}
+Figure~\ref{fig:examples-ladder} shows one representative example per benchmark
+(the diagnostic ladder), each with Qwen3.5-0.8B's correct answer.
+Figure~\ref{fig:examples-vwtq} is a gallery of Qwen3.5-0.8B's failures on
+Wikipedia-style visual tables (VWTQ/VWTQ-Syn). The errors are concretely lookup
+mistakes, such as miscounting rows, returning a value from an adjacent column or
+row, or emitting a cell of the wrong type, rather than failures to read the
+table, consistent with the sub-domain diagnosis of Section~\ref{sec:gap}.
+\input{examples_gallery}
+
+\subsection{Pipeline scripts}
+\texttt{run\_eval.py} (config-driven evaluation runner; one entry point scores
+any registered model), \texttt{tablevqa\_subdomain\_report.py} (sub-domain
+decomposition), \texttt{efficiency\_ablation.py} (precision/token-cap
+ablations), \texttt{build\_table\_sft.py} (training-mixture construction with
+contamination guards), \texttt{train\_lora\_qwen.py} (PEFT adaptation),
+\texttt{regression\_gate.py} (pre-registered no-regression decision),
+\texttt{push\_dataset\_hf.py} (dataset release), and
+\texttt{make\_report\_figures.py} (figures).
+
+\end{document}

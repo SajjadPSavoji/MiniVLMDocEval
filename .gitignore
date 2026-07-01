@@ -1,0 +1,40 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+.ipynb_checkpoints/
+
+# Virtual environment
+.venv/
+
+# VLMEvalKit engine — cloned by setup.sh at the pinned commit (see external/README.md)
+external/VLMEvalKit/
+
+
+# Eval outputs — everything (predictions + summary tables) lives on Drive, never git
+outputs/
+results/
+*.log
+.env
+
+# OS
+.DS_Store
+
+# Claude Code config (session-specific; not project config)
+.claude/
+
+# Local mirror of Drive results (rclone sync_results.sh)
+drive_sync/
+
+# Local LoRA training data (regenerable; never committed)
+train_data/
+
+# LaTeX build artifacts (keep .tex/.bib/figures/*.pdf; drop intermediates)
+technical_report/*.aux
+technical_report/*.log
+technical_report/*.bbl
+technical_report/*.blg
+technical_report/*.out
+technical_report/*.fls
+technical_report/*.fdb_latexmk

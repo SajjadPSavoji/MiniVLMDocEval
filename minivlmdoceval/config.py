@@ -1,0 +1,60 @@
+"""Central configuration for MiniVLMDocEval evaluation runs."""
+
+# Models already supported by VLMEvalKit out-of-the-box (no custom wrapper).
+# Values are VLMEvalKit registry keys. The remaining shortlist models
+# (FastVLM-0.5B, Qwen3.5-0.8B -> custom wrappers; LFM2.5-VL-450M -> config key)
+# are added later.
+BUILTIN_MODELS = [
+    "SmolVLM2-500M",                     # HuggingFaceTB/SmolVLM2-500M-Video-Instruct
+    "InternVL3-1B",                      # OpenGVLab/InternVL3-1B
+    "llava-onevision-qwen2-0.5b-ov-hf",  # llava-hf/... (HF-native; our shortlist pick)
+]
+
+# Models needing custom integration (registered at runtime via
+# minivlmdoceval.custom_models.register_custom_models). Run via explicit --models,
+# each in the transformers env it needs: Env A (transformers<4.57) -> FastVLM-0.5B;
+# Env B (transformers@main) -> Qwen3.5-0.8B and LFM2.5-VL-450M.
+CUSTOM_MODELS = [
+    "FastVLM-0.5B",      # apple/FastVLM-0.5B (Env A; trust_remote_code)
+    "Qwen3.5-0.8B",      # Qwen/Qwen3.5-0.8B (Env B; upstreamed 2026-02)
+    "LFM2.5-VL-450M",    # LiquidAI/LFM2.5-VL-450M (Env B; processor native >=4.57)
+]
+
+# Part-2 PoC: Qwen3.5-0.8B + a LoRA adapter for TableVQA. Registered on-demand —
+# only usable when $MVDE_LORA_ADAPTER points at an adapter dir (see custom_models.py
+# and scripts/train_lora_qwen.py). Not a default eval target.
+FINETUNED_MODELS = [
+    "Qwen3.5-0.8B-TableLoRA",
+]
+
+ALL_MODELS = BUILTIN_MODELS + CUSTOM_MODELS
+
+# Document-understanding benchmark suite — FULL splits (VLMEvalKit dataset keys).
+DATASETS = [
+    "OCRBench",       # OCR across 5 sub-tasks          -> accuracy (/1000 norm)
+    "DocVQA_VAL",     # dense document text VQA         -> ANLS
+    "ChartQA_TEST",   # chart data + numeric reasoning  -> relaxed accuracy
+    "InfoVQA_VAL",    # infographic layout reasoning    -> ANLS
+    "TableVQABench",  # table structure reasoning       -> accuracy
+]
+
+# Output tree. EVERYTHING is written under a single base dir (`--out`), so the
+# code runs on any system; on Colab point --out at Google Drive so it persists
+# across sessions (and enables VLMEvalKit --reuse).
+#   <out>/predictions/<model>/<eval_id>/...   VLMEvalKit work-dir (status.json, preds)
+#   <out>/summary/comparison.{csv,md}, scores_long.csv
+#   <out>/logs/<model>_<timestamp>.log        tee of each run (resume/debug)
+DEFAULT_OUT = "outputs"
+PREDICTIONS_SUBDIR = "predictions"
+SUMMARY_SUBDIR = "summary"
+LOGS_SUBDIR = "logs"
+
+# Cap each dataset to N samples (full datasets are too slow on a free T4), drawn
+# with a fixed seed for reproducibility. Note: OCRBench is exactly 1000, so
+# N=1000 evaluates it in full; the others are sub-sampled.
+DEFAULT_N = 1000
+SAMPLE_SEED = 42
+
+# Cap generation length (the wrappers default to 2048, which wastes time on our
+# short-answer benchmarks). 128 is safe for word/number/phrase answers.
+DEFAULT_MAX_NEW_TOKENS = 128

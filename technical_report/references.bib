@@ -1,0 +1,170 @@
+% Curated, verified bibliography for the MiniVLMDocEval technical report.
+% arXiv IDs for benchmark/method/architecture papers verified against arxiv.org.
+% Newer product models are cited via their Hugging Face model cards (misc
+% entries) to avoid relying on unverifiable preprint identifiers.
+% NOTE: BibTeX has no percent-comments; keep the at-sign out of comment text.
+
+% ---------------- Benchmarks ----------------
+@inproceedings{mathew2021docvqa,
+  title={{DocVQA}: A Dataset for {VQA} on Document Images},
+  author={Mathew, Minesh and Karatzas, Dimosthenis and Jawahar, C.~V.},
+  booktitle={IEEE/CVF Winter Conf. on Applications of Computer Vision (WACV)},
+  year={2021},
+  note={arXiv:2007.00398}
+}
+
+@inproceedings{mathew2022infographicvqa,
+  title={{InfographicVQA}},
+  author={Mathew, Minesh and Bagal, Viraj and Tito, Rub{\`e}n and Karatzas, Dimosthenis and Valveny, Ernest and Jawahar, C.~V.},
+  booktitle={IEEE/CVF Winter Conf. on Applications of Computer Vision (WACV)},
+  year={2022},
+  note={arXiv:2104.12756}
+}
+
+@inproceedings{masry2022chartqa,
+  title={{ChartQA}: A Benchmark for Question Answering about Charts with Visual and Logical Reasoning},
+  author={Masry, Ahmed and Long, Do Xuan and Tan, Jia Qing and Joty, Shafiq and Hoque, Enamul},
+  booktitle={Findings of the Association for Computational Linguistics (ACL)},
+  year={2022},
+  note={arXiv:2203.10244}
+}
+
+@article{liu2024ocrbench,
+  title={{OCRBench}: On the Hidden Mystery of {OCR} in Large Multimodal Models},
+  author={Liu, Yuliang and Li, Zhang and Huang, Mingxin and Yang, Biao and Yu, Wenwen and Li, Chunyuan and Yin, Xucheng and Liu, Cheng-Lin and Jin, Lianwen and Bai, Xiang},
+  journal={Science China Information Sciences},
+  year={2024},
+  note={arXiv:2305.07895}
+}
+
+@article{kim2024tablevqa,
+  title={{TableVQA-Bench}: A Visual Question Answering Benchmark on Multiple Table Domains},
+  author={Kim, Yoonsik and Yim, Moonbin and Song, Ka Yeon},
+  journal={arXiv preprint arXiv:2404.19205},
+  year={2024}
+}
+
+% ---------------- Evaluation framework ----------------
+@article{duan2024vlmevalkit,
+  title={{VLMEvalKit}: An Open-Source Toolkit for Evaluating Large Multi-Modality Models},
+  author={Duan, Haodong and Yang, Junming and Qiao, Yuxuan and Fang, Xinyu and Chen, Lin and Liu, Yuan and Dong, Xiaoyi and Zang, Yuhang and Zhang, Pan and Wang, Jiaqi and others},
+  journal={Proc. ACM Int. Conf. on Multimedia (MM)},
+  year={2024},
+  note={arXiv:2407.11691}
+}
+
+% ---------------- Adaptation methods ----------------
+@inproceedings{hu2022lora,
+  title={{LoRA}: Low-Rank Adaptation of Large Language Models},
+  author={Hu, Edward J. and Shen, Yelong and Wallis, Phillip and Allen-Zhu, Zeyuan and Li, Yuanzhi and Wang, Shean and Wang, Lu and Chen, Weizhu},
+  booktitle={International Conference on Learning Representations (ICLR)},
+  year={2022},
+  note={arXiv:2106.09685}
+}
+
+@inproceedings{dettmers2023qlora,
+  title={{QLoRA}: Efficient Finetuning of Quantized {LLMs}},
+  author={Dettmers, Tim and Pagnoni, Artidoro and Holtzman, Ari and Zettlemoyer, Luke},
+  booktitle={Advances in Neural Information Processing Systems (NeurIPS)},
+  year={2023},
+  note={arXiv:2305.14314}
+}
+
+@inproceedings{zheng2024mmtab,
+  title={Multimodal Table Understanding},
+  author={Zheng, Mingyu and Feng, Xinwei and Si, Qingyi and She, Qiaoqiao and Lin, Zheng and Jiang, Wenbin and Wang, Weiping},
+  booktitle={Annual Meeting of the Association for Computational Linguistics (ACL)},
+  year={2024},
+  note={arXiv:2406.08100; MMTab dataset and Table-LLaVA}
+}
+
+% ---------------- Architectures / encoders ----------------
+@article{marafioti2025smolvlm,
+  title={{SmolVLM}: Redefining Small and Efficient Multimodal Models},
+  author={Marafioti, Andr{\'e}s and Zohar, Orr and Farr{\'e}, Miquel and Noyan, Merve and Bakouch, Elie and others},
+  journal={arXiv preprint arXiv:2504.05299},
+  year={2025}
+}
+
+@article{li2024llavaonevision,
+  title={{LLaVA-OneVision}: Easy Visual Task Transfer},
+  author={Li, Bo and Zhang, Yuanhan and Guo, Dong and Zhang, Renrui and Li, Feng and Zhang, Hao and Zhang, Kaichen and Li, Yanwei and Liu, Ziwei and Li, Chunyuan},
+  journal={arXiv preprint arXiv:2408.03326},
+  year={2024}
+}
+
+@article{wang2024qwen2vl,
+  title={{Qwen2-VL}: Enhancing Vision-Language Model's Perception of the World at Any Resolution},
+  author={Wang, Peng and Bai, Shuai and Tan, Sinan and Wang, Shijie and Fan, Zhihao and Bai, Jinze and Chen, Keqin and Liu, Xuejing and Wang, Jialin and Ge, Wenbin and others},
+  journal={arXiv preprint arXiv:2409.12191},
+  year={2024}
+}
+
+@inproceedings{chen2024internvl,
+  title={{InternVL}: Scaling up Vision Foundation Models and Aligning for Generic Visual-Linguistic Tasks},
+  author={Chen, Zhe and Wu, Jiannan and Wang, Wenhai and Su, Weijie and Chen, Guo and Xing, Sen and Zhong, Muyan and Zhang, Qinglong and Zhu, Xizhou and Lu, Lewei and others},
+  booktitle={IEEE/CVF Conf. on Computer Vision and Pattern Recognition (CVPR)},
+  year={2024},
+  note={arXiv:2312.14238}
+}
+
+@inproceedings{zhai2023siglip,
+  title={Sigmoid Loss for Language Image Pre-Training},
+  author={Zhai, Xiaohua and Mustafa, Basil and Kolesnikov, Alexander and Beyer, Lucas},
+  booktitle={IEEE/CVF International Conference on Computer Vision (ICCV)},
+  year={2023},
+  note={arXiv:2303.15343; SigLIP}
+}
+
+@inproceedings{dehghani2023navit,
+  title={Patch n' Pack: {NaViT}, a Vision Transformer for Any Aspect Ratio and Resolution},
+  author={Dehghani, Mostafa and Mustafa, Basil and Djolonga, Josip and Heek, Jonathan and Minderer, Matthias and Houlsby, Neil and others},
+  booktitle={Advances in Neural Information Processing Systems (NeurIPS)},
+  year={2023},
+  note={arXiv:2307.06304}
+}
+
+% ---------------- Calibration ----------------
+@inproceedings{guo2017calibration,
+  title={On Calibration of Modern Neural Networks},
+  author={Guo, Chuan and Pleiss, Geoff and Sun, Yu and Weinberger, Kilian Q.},
+  booktitle={International Conference on Machine Learning (ICML)},
+  year={2017},
+  note={arXiv:1706.04599}
+}
+
+% ---------------- Evaluated models (Hugging Face model cards) ----------------
+@misc{internvl3card,
+  title={{InternVL3-1B} (model card)},
+  author={{OpenGVLab}},
+  year={2025},
+  howpublished={\url{https://huggingface.co/OpenGVLab/InternVL3-1B-hf}}
+}
+
+@misc{qwen35card,
+  title={{Qwen3.5-0.8B} (model card)},
+  author={{Qwen Team, Alibaba}},
+  year={2026},
+  howpublished={\url{https://huggingface.co/Qwen/Qwen3.5-0.8B}}
+}
+
+@misc{lfm2vlcard,
+  title={{LFM2.5-VL-450M} (model card)},
+  author={{Liquid AI}},
+  year={2026},
+  howpublished={\url{https://huggingface.co/LiquidAI/LFM2.5-VL-450M}}
+}
+
+@misc{fastvlmcard,
+  title={{FastVLM-0.5B} (model card)},
+  author={{Apple}},
+  year={2025},
+  howpublished={\url{https://huggingface.co/apple/FastVLM-0.5B}}
+}
+
+@misc{smolvlm2card,
+  title={{SmolVLM2-500M-Video-Instruct} (model card)},
+  author={{Hugging Face}},
+  year={2025},
+  howpublished={\url{https://huggingface.co/HuggingFaceTB/SmolVLM2-500M-Video-Instruct}}
+}
